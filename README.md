@@ -18,25 +18,36 @@ Clinical deployment would require external validation, dermatologist comparison,
 
 Black-box models may face greater transparency, documentation, human-oversight, and risk-management burdens in high-risk clinical AI settings. Interpretable models may make clinician oversight and model review easier.
 
+## License and Third-Party Materials
+
+The source code is licensed under [Apache-2.0](LICENSE). The HAM10000 dataset, pretrained model weights, and
+third-party packages are not included under that license. Download or use them only under their respective licenses,
+terms of use, and access requirements. See [NOTICE](NOTICE) for details.
+
 ## Scientific Motivation
+
+This project compares several ways of representing and classifying dermatoscopic images from the
+[HAM10000 dataset](https://arxiv.org/abs/1803.10417). It supports binary melanoma detection (`mel` versus all
+other diagnoses) and seven-class diagnosis prediction. The data is split reproducibly into training, validation,
+and test partitions by `lesion_id`, so images of the same lesion cannot appear in more than one partition. Models
+are fitted only on training data, tuning and early stopping use validation data, and final metrics are reported on
+the held-out test data.
+
+The tabular experiments compare logistic regression, KNN, a shallow class-balanced decision tree, random forest,
+and optional XGBoost, LightGBM, and CatBoost models. Each model is trained on the same prepared representations:
+downsampled 25×25 image pixels, computational ABCD-style features, foundation-model image embeddings, clinical
+metadata, and combinations of those inputs. Imputation, scaling, one-hot encoding, and PCA are fitted on the
+training split only and then applied unchanged to validation and test data, avoiding preprocessing leakage.
+
+The project also trains neural baselines: RNN, LSTM, and Transformer encoders over prepared feature sequences;
+RNN, LSTM, Transformer, and compact ViT models over raw image pixels; and a ResNet18 CNN baseline. These models
+learn their parameters from the training images with validation-based early stopping. All model families write their
+predictions and metrics to the same output structure, allowing direct comparison of predictive performance and,
+for the shallow decision tree, inspection of its learned decision rules.
 
 The main experimental question is:
 
-Does adding medical foundation-model embeddings improve an interpretable decision tree beyond handcrafted ABCDE features alone, while keeping the final classifier interpretable?
-
-The code trains the same tabular classifiers on the same cached representation so model comparisons are fair:
-
-- ABCDE only
-- medical embeddings only
-- ABCDE + medical embeddings
-- ABCDE + PCA(medical embeddings)
-- ABCDE + medical embeddings + metadata
-
-The main pipeline also trains neural sequence baselines by default on the same prepared features and raw-image
-neural baselines on pixels, so the final leaderboard compares shallow ML models, RNN, LSTM, Transformer-style
-models, ViT, and CNN with the same metrics.
-
-The primary proposed model is a shallow `DecisionTreeClassifier` with `class_weight="balanced"`.
+> How can we design a novel, reliable method for predicting skin-lesion diagnoses from images?
 
 ## Environment
 
@@ -172,6 +183,25 @@ python scripts/train_all.py \
     --sequence_feature_sets abcde embeddings abcde_embeddings abcde_pca_embeddings abcde_embeddings_metadata
 ```
 
+### Complete GPU experiment
+
+To train every model family and evaluate the feature-sequence RNN, LSTM, and Transformer on every prepared feature set, run:
+
+```bash
+python scripts/train_all.py \
+    --dataset ham10000 \
+    --data_root data/HAM10000 \
+    --embedding_model_name microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 \
+    --out_dir outputs_all_gpu \
+    --task binary \
+    --batch_size 8 \
+    --pca_dim 64 \
+    --device cuda \
+    --sequence_feature_sets raw25_pixels abcde embeddings abcde_embeddings abcde_pca_embeddings metadata abcde_embeddings_metadata
+```
+
+This writes the combined comparison to `outputs_all_gpu/reports/leaderboard.csv` and detailed metrics to `outputs_all_gpu/reports/metrics.json`. The neural sequence and raw-image models use CUDA; classical models use their own available backend.
+
 Use `--skip_sequence_models` for a faster run with only the classical tabular baselines.
 Use `--skip_raw_image_models` to skip raw-image RNN/LSTM/Transformer/ViT, and `--skip_cnn` to skip CNN.
 
@@ -241,4 +271,42 @@ Print a compact leaderboard:
 
 ```bash
 python scripts/make_report.py --out_dir outputs
+```
+
+## Helpful commands
+
+Prepare the dataset metadata and reproducible train/validation/test splits without training models:
+
+```bash
+python scripts/prepare_ham10000.py --data_root data/HAM10000 --out_dir outputs
+```
+
+Extract (or reuse) the cached ABCDE features and image embeddings:
+
+```bash
+python scripts/extract_features.py --data_root data/HAM10000 --out_dir outputs --device cuda
+```
+
+Run decision-tree experiments only:
+
+```bash
+python scripts/train_decision_trees.py --data_root data/HAM10000 --out_dir outputs --device cuda
+```
+
+Sweep readable decision-tree configurations and save the best rules:
+
+```bash
+python scripts/train_readable_tree_sweep.py --data_root data/HAM10000 --out_dir outputs --device cuda
+```
+
+Compare logistic regression, KNN, and MLP baselines; add `--run_cnn` to include the CNN:
+
+```bash
+python scripts/train_focused_comparison.py --data_root data/HAM10000 --out_dir outputs --device cuda --run_cnn
+```
+
+View all options for the main training command:
+
+```bash
+python scripts/train_all.py --help
 ```

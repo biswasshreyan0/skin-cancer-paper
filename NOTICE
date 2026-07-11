@@ -1,0 +1,15 @@
+ABCDE-Tree
+Copyright 2026 biswasshreyan0
+
+This repository is licensed under the Apache License, Version 2.0. See LICENSE.
+
+Third-party data and model notice
+-------------------------------
+HAM10000 data, pretrained model weights, and third-party Python packages are
+not included in this repository and are not licensed under this repository's
+Apache-2.0 license. Users must obtain them separately and comply with their
+respective licenses, terms of use, and access requirements.
+
+The project documentation identifies the HAM10000 dataset source and supported
+embedding-model providers for reference. Their names and marks belong to their
+respective owners.
