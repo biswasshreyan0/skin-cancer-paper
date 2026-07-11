@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Jupyter and editor files
+.ipynb_checkpoints/
+.vscode/
+.idea/
+*.swp
+
+# HAM10000 and other local datasets
+data/raw/
+data/HAM10000/
+data/processed/
+
+# Generated experiment artifacts
+outputs/
+
+# Local model and framework caches
+.cache/
+*.pt
+*.pth
+*.ckpt
+*.joblib
+*.pkl
+wandb/
+mlruns/
+
+# OS files
+.DS_Store
+Thumbs.db

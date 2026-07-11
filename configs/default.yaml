@@ -1,0 +1,31 @@
+seed: 42
+dataset: ham10000
+data_root: data/HAM10000
+out_dir: outputs
+task: binary
+embedding_model_name: yyupenn/whylesionclip
+batch_size: 8
+pca_dim: 64
+splits:
+  train_size: 0.70
+  val_size: 0.15
+  test_size: 0.15
+models:
+  decision_tree:
+    max_depth: [2, 3, 4, 5, 10, 15]
+    min_samples_leaf: [5, 10, 20]
+  logistic_regression:
+    max_iter: 5000
+  knn:
+    n_neighbors: [3, 5, 7, 11]
+  random_forest:
+    n_estimators: 300
+    max_depth: [null, 5, 10]
+  xgboost:
+    n_estimators: 300
+    max_depth: [3, 4]
+    learning_rate: [0.03, 0.05]
+  lightgbm:
+    n_estimators: 300
+    max_depth: [-1, 5]
+    learning_rate: [0.03, 0.05]
