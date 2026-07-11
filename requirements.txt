@@ -1,18 +1,18 @@
-torch
-torchvision
-transformers
-accelerate
-timm
-open_clip_torch
-numpy
-pandas
-scikit-learn
-opencv-python
-pillow
-matplotlib
-tqdm
-joblib
-xgboost
-lightgbm
-catboost
-pyyaml
+# Install PyTorch separately using the command in README.md.  That command
+# selects the correct CUDA build; installing it from PyPI may select a CPU build.
+transformers>=4.45,<5
+accelerate>=0.34,<2
+timm>=1.0,<2
+open_clip_torch>=2.26,<4
+numpy>=1.26,<2
+pandas>=2.1,<3
+scikit-learn>=1.4,<2
+opencv-python>=4.9,<5
+pillow>=10,<12
+matplotlib>=3.8,<4
+tqdm>=4.66,<5
+joblib>=1.3,<2
+xgboost>=2.0,<4
+lightgbm>=4.0,<5
+catboost>=1.2,<2
+pyyaml>=6.0,<7

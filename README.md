@@ -40,12 +40,27 @@ The primary proposed model is a shallow `DecisionTreeClassifier` with `class_wei
 
 ## Environment
 
+This guide has been tested for **Ubuntu or WSL2 (Ubuntu)** with **Python 3.10**. An NVIDIA GPU is recommended but not required; CPU runs work but can take much longer. The first run needs an internet connection to download the image-embedding model.
+
+### 1. Get the code
+
+If you have not already downloaded the project, open a terminal and run:
+
+```bash
+git clone https://github.com/biswasshreyan0/skin-cancer-paper.git
+cd skin-cancer-paper
+```
+
+If you already have the project, open a terminal in the folder containing `README.md`. All commands below must be run from that folder.
+
+### 2. Create the Python environment
+
 Target platform:
 
 - WSL Ubuntu
 - Conda
 - Python 3.10
-- NVIDIA RTX 4060 with 8 GB VRAM
+- NVIDIA GPU with 8 GB VRAM recommended for the full pipeline
 
 Create and activate the environment:
 
@@ -57,7 +72,7 @@ conda activate skinai
 Install PyTorch with CUDA support:
 
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
 ```
 
 Install the remaining dependencies:
@@ -66,17 +81,19 @@ Install the remaining dependencies:
 pip install -r requirements.txt
 ```
 
-Verify CUDA:
+Verify that PyTorch can see the GPU:
 
 ```bash
-python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'not detected')"
 ```
 
 An RTX 4060 with 8 GB VRAM should be enough for embedding extraction with `--batch_size 8`. If CUDA runs out of memory, use `--batch_size 4`.
 
+If CUDA is not available, you can still run the project on CPU by adding `--device cpu --batch_size 2` to the commands below. Expect it to be substantially slower.
+
 ## Dataset
 
-Download HAM10000 and place it here:
+Follow the beginner-friendly download instructions in [DOWNLOAD_DATA.md](DOWNLOAD_DATA.md). When complete, your files should look like this:
 
 ```text
 data/HAM10000/
@@ -101,7 +118,27 @@ Splits are made by `lesion_id`, not `image_id`, so multiple images of the same l
 
 ## Run
 
-Main binary melanoma pipeline:
+### First run: fast sanity check
+
+This first command checks that the dataset, feature extraction, embeddings, and classical models work. It skips the slower neural models:
+
+```bash
+python scripts/train_all.py \
+    --data_root data/HAM10000 \
+    --out_dir outputs \
+    --batch_size 8 \
+    --pca_dim 64 \
+    --tabular_models decision_tree \
+    --skip_sequence_models \
+    --skip_raw_image_models \
+    --skip_cnn
+```
+
+On success, you will see files such as `outputs/reports/leaderboard.csv` and `outputs/figures/decision_tree.png`.
+
+### Full experiment
+
+This trains the classical and neural models. It may take hours and requires considerably more GPU memory, disk space, and time than the sanity check:
 
 ```bash
 python scripts/train_all.py \
@@ -137,19 +174,6 @@ python scripts/train_all.py \
 
 Use `--skip_sequence_models` for a faster run with only the classical tabular baselines.
 Use `--skip_raw_image_models` to skip raw-image RNN/LSTM/Transformer/ViT, and `--skip_cnn` to skip CNN.
-
-Run without pretrained CNN downloads, which is the default:
-
-```bash
-python scripts/train_all.py \
-    --dataset ham10000 \
-    --data_root data/HAM10000 \
-    --embedding_model_name microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 \
-    --out_dir outputs \
-    --task binary \
-    --batch_size 8 \
-    --pca_dim 64
-```
 
 Use `--force_recompute_embeddings` to refresh cached embeddings and `--force_recompute_abcde` to refresh cached ABCDE features.
 

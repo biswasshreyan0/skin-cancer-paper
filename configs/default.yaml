@@ -3,7 +3,7 @@ dataset: ham10000
 data_root: data/HAM10000
 out_dir: outputs
 task: binary
-embedding_model_name: yyupenn/whylesionclip
+embedding_model_name: microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224
 batch_size: 8
 pca_dim: 64
 splits:
