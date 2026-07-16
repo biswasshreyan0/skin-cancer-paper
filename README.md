@@ -29,9 +29,10 @@ The code trains the same tabular classifiers on the same cached representation s
 - ABCDE only
 - medical embeddings only
 - ABCDE + medical embeddings
-- ABCDE + PCA(medical embeddings)
 - ABCDE + medical embeddings + metadata
-
+- raw25_pixels (each image is converted to grayscale, normalized, and then passed into classical ML models)
+- pixels ($64 \times 64$ raw images that are passed into neural models like RNN/LSTM/ResNet18 etc.)
+ 
 The main pipeline also trains neural sequence baselines by default on the same prepared features and raw-image
 neural baselines on pixels, so the final leaderboard compares shallow ML models, RNN, LSTM, Transformer-style
 models, ViT, and CNN with the same metrics.
