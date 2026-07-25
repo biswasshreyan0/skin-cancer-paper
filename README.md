@@ -16,7 +16,7 @@ This project is for research purposes only. It is not approved for clinical diag
 
 Clinical deployment would require external validation, dermatologist comparison, bias testing across skin tones and patient populations, prospective validation, clinical workflow testing, and regulatory review.
 
-Black-box models may face greater transparency, documentation, human-oversight, and risk-management burdens in high-risk clinical AI settings. Interpretable models may make clinician oversight and model review easier.
+
 
 ## Scientific Motivation
 
@@ -37,7 +37,6 @@ The main pipeline also trains neural sequence baselines by default on the same p
 neural baselines on pixels, so the final leaderboard compares shallow ML models, RNN, LSTM, Transformer-style
 models, ViT, and CNN with the same metrics.
 
-The primary proposed model is a shallow `DecisionTreeClassifier` with `class_weight="balanced"`.
 
 ## Environment
 
