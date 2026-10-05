@@ -29,6 +29,9 @@ data/raw/
 data/HAM10000/
 data/processed/
 
+# Local one-off inspection example (not used by experiment runs)
+sample/
+
 # Generated experiment artifacts
 outputs/
 /outputs_*/
