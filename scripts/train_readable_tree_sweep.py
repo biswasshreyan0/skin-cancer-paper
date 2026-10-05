@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.ham10000 import load_ham10000
 from src.data.splits import make_lesion_splits
+from src.data.targets import get_target_spec, prepare_task_dataframe
 from src.features.abcde import extract_abcde_dataframe
 from src.features.cache import (
     abcde_cache_path,
@@ -46,7 +47,7 @@ from src.utils.seed import set_seed
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sweep readable ABCDE + PCA(embeddings) decision trees.")
+    parser = argparse.ArgumentParser(description="Sweep readable ABCD + PCA(embeddings) decision trees.")
     parser.add_argument("--data_root", default="data/HAM10000")
     parser.add_argument("--embedding_model_name", default="microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224")
     parser.add_argument("--out_dir", default="outputs")
@@ -80,9 +81,12 @@ def main() -> None:
     for subdir in ["embeddings", "features", "models", "reports", "splits", "predictions", "figures"]:
         ensure_dir(out_dir / subdir)
 
-    df = load_ham10000(args.data_root)
+    target = get_target_spec("cancer")
+    df = prepare_task_dataframe(load_ham10000(args.data_root), "cancer")
     df["image_id"] = df["image_id"].astype(str)
-    train_df, val_df, test_df = make_lesion_splits(df, out_dir, seed=args.seed)
+    train_df, val_df, test_df = make_lesion_splits(
+        df, out_dir, label_col=target.label_column, seed=args.seed
+    )
     abcde_df = _get_abcde_features(df, out_dir, args.force_recompute_abcde)
     embedding_cache = _get_embeddings(
         df,
@@ -93,9 +97,9 @@ def main() -> None:
         args.force_recompute_embeddings,
     )
 
-    y_train = train_df["binary_label"].to_numpy()
-    y_val = val_df["binary_label"].to_numpy()
-    y_test = test_df["binary_label"].to_numpy()
+    y_train = train_df[target.label_column].to_numpy()
+    y_val = val_df[target.label_column].to_numpy()
+    y_test = test_df[target.label_column].to_numpy()
     run_name = _safe_run_name(args.run_name)
     grid = list(
         ParameterGrid(
@@ -129,13 +133,13 @@ def main() -> None:
             out_dir=out_dir,
             pca_dim=pca_dim,
         )
-        fs = feature_sets["abcde_pca_embeddings"]
+        fs = feature_sets["abcd_pca_embeddings"]
         for idx, params in enumerate(grid, start=1):
             print(f"[readable_tree] pca_dim={pca_dim} params {idx}/{len(grid)}: {params}", flush=True)
             model = DecisionTreeClassifier(random_state=args.seed, **params)
             model.fit(fs.X_train, y_train)
             val_pred, val_prob = _predict_with_prob(model, fs.X_val)
-            val_metrics = binary_metrics(y_val, val_pred, val_prob)
+            val_metrics = binary_metrics(y_val, val_pred, val_prob, class_names=target.class_names)
             threshold, threshold_metrics = _select_threshold(
                 y_val,
                 val_prob,
@@ -143,10 +147,10 @@ def main() -> None:
                 min_specificity=args.min_specificity,
             )
             test_pred, test_prob = _predict_with_prob(model, fs.X_test, threshold=threshold)
-            test_metrics = binary_metrics(y_test, test_pred, test_prob)
+            test_metrics = binary_metrics(y_test, test_pred, test_prob, class_names=target.class_names)
 
             row = {
-                "feature_set": "abcde_pca_embeddings",
+                "feature_set": "abcd_pca_embeddings",
                 "model": "readable_decision_tree",
                 "pca_dim": pca_dim,
                 "criterion": params["criterion"],
@@ -208,7 +212,7 @@ def main() -> None:
     leaderboard = pd.DataFrame(
         [
             {
-                "feature_set": "abcde_pca_embeddings",
+                "feature_set": "abcd_pca_embeddings",
                 "model": "readable_decision_tree",
                 "pca_dim": best["pca_dim"],
                 "best_criterion": best["params"]["criterion"],
@@ -250,7 +254,7 @@ def main() -> None:
     write_json(
         {
             "best": {
-                "feature_set": "abcde_pca_embeddings",
+                "feature_set": "abcd_pca_embeddings",
                 "pca_dim": best["pca_dim"],
                 "params": best["params"],
                 "threshold": best["threshold"],

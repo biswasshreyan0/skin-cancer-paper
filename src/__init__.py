@@ -1,1 +1,1 @@
-"""ABCDE-Tree research package."""
+"""ABCD-Tree research package."""

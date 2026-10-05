@@ -14,7 +14,7 @@ def safe_name(name: str) -> str:
 
 
 def abcde_cache_path(out_dir: str | Path) -> Path:
-    return Path(out_dir) / "features" / "abcde_features.csv"
+    return Path(out_dir) / "features" / "abcd_features.csv"
 
 
 def embedding_cache_path(out_dir: str | Path, model_name: str) -> Path:

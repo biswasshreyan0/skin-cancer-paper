@@ -2,14 +2,20 @@ seed: 42
 dataset: ham10000
 data_root: data/HAM10000
 out_dir: outputs
-task: binary
+task: cancer
 embedding_model_name: microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224
 batch_size: 8
 pca_dim: 64
 splits:
-  train_size: 0.70
-  val_size: 0.15
-  test_size: 0.15
+  train_size: 0.80
+  val_size: 0.10
+  test_size: 0.10
+cross_validation:
+  folds: 5
+  repeats: 3
+  group_column: lesion_id
+imbalance_strategy: hybrid
+raw_image_size: 224
 models:
   decision_tree:
     max_depth: [2, 3, 4, 5, 10, 15]

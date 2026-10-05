@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from src.data.targets import get_target_spec
 from src.utils.metrics import binary_metrics, multiclass_metrics
 
 
@@ -23,8 +24,12 @@ def predict_labels_and_probabilities(model, X):
     return y_pred, y_prob
 
 
-def evaluate_model(model, X, y, task: str = "binary") -> tuple[dict, np.ndarray, np.ndarray | None]:
+def evaluate_model(model, X, y, task: str = "cancer") -> tuple[dict, np.ndarray, np.ndarray | None]:
     y_pred, y_prob = predict_labels_and_probabilities(model, X)
-    if task == "binary":
-        return binary_metrics(y, y_pred, y_prob), y_pred, y_prob
-    return multiclass_metrics(y, y_pred, y_prob), y_pred, y_prob
+    target = get_target_spec(task)
+    if target.is_binary:
+        return binary_metrics(y, y_pred, y_prob, class_names=target.class_names), y_pred, y_prob
+    # sklearn's probability columns follow ``classes_``.  Preserve that order
+    # so each one-vs-rest AUPRC is assigned to the correct diagnosis.
+    class_labels = getattr(model, "classes_", None)
+    return multiclass_metrics(y, y_pred, y_prob, class_labels=class_labels), y_pred, y_prob

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +14,7 @@ from sklearn.model_selection import GroupShuffleSplit, StratifiedShuffleSplit
 def make_lesion_splits(
     df: pd.DataFrame,
     out_dir: str | Path,
-    label_col: str = "binary_label",
+    label_col: str = "cancer_label",
     group_col: str = "lesion_id",
     seed: int = 42,
     train_size: float = 0.80,
@@ -60,6 +62,66 @@ def make_lesion_splits(
     val_df.to_csv(split_dir / "val.csv", index=False)
     test_df.to_csv(split_dir / "test.csv", index=False)
     return train_df, val_df, test_df
+
+
+def export_repository_split_manifests(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    destination: str | Path,
+    label_col: str,
+    target: dict,
+    seed: int,
+) -> dict:
+    """Write path-independent CSV manifests suitable for version control."""
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    columns = ["image_id", "lesion_id", label_col, "multiclass_label", "dx"]
+    frames = {"train": train_df, "val": val_df, "test": test_df}
+    summary = {
+        "target": target,
+        "group_column": "lesion_id",
+        "split_seed": seed,
+        "columns": columns,
+        "partitions": {},
+    }
+    lesion_sets = {}
+    for name, frame in frames.items():
+        path = destination / f"{name}.csv"
+        frame.loc[:, columns].to_csv(path, index=False)
+        lesion_sets[name] = set(frame["lesion_id"])
+        summary["partitions"][name] = {
+            "file": path.name,
+            "rows": int(len(frame)),
+            "unique_image_id": int(frame["image_id"].nunique()),
+            "unique_lesion_id": int(frame["lesion_id"].nunique()),
+            "positive_images": int(frame[label_col].sum()) if set(frame[label_col].unique()) <= {0, 1} else None,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+    summary["lesion_id_overlap_counts"] = {
+        "train_val": len(lesion_sets["train"] & lesion_sets["val"]),
+        "train_test": len(lesion_sets["train"] & lesion_sets["test"]),
+        "val_test": len(lesion_sets["val"] & lesion_sets["test"]),
+    }
+    (destination / "manifest.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    table_rows = "\n".join(
+        f"| {name} | {values['rows']:,} | {values['unique_lesion_id']:,} | {values['positive_images'] if values['positive_images'] is not None else 'n/a'} |"
+        for name, values in summary["partitions"].items()
+    )
+    readme = f"""# Table 1 split manifests
+
+These files record the exact image-to-partition assignments for `{target['name']}`. Local image paths are omitted; image IDs, lesion IDs, and labels are retained.
+
+| Partition | Images | Unique `lesion_id` | Positive images |
+| --- | ---: | ---: | ---: |
+{table_rows}
+
+Target definition: {target['description']}
+
+The split seed is `{seed}`. All three pairwise `lesion_id` intersections are zero. `manifest.json` records counts and SHA-256 digests.
+"""
+    (destination / "README.md").write_text(readme, encoding="utf-8")
+    return summary
 
 
 def _stratified_group_sample(

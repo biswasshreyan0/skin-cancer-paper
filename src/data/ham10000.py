@@ -10,6 +10,8 @@ PROCESSED_COLUMNS = [
     "image_id",
     "image_path",
     "lesion_id",
+    "cancer_label",
+    "melanoma_label",
     "binary_label",
     "multiclass_label",
     "dx",
@@ -38,7 +40,15 @@ def load_ham10000(data_root: str | Path, processed_dir: str | Path = "data/proce
 
     df = df.copy()
     df["image_path"] = df["image_id"].map(lambda image_id: str(_resolve_image_path(data_root, image_id)))
-    df["binary_label"] = (df["dx"] == "mel").astype(int)
+    # ``akiec`` is deliberately unresolved for strict cancer-vs-non-cancer:
+    # HAM10000 combines premalignant actinic keratoses with intraepithelial
+    # carcinoma in that single category.
+    df["cancer_label"] = -1
+    df.loc[df["dx"].isin(["mel", "bcc"]), "cancer_label"] = 1
+    df.loc[df["dx"].isin(["nv", "bkl", "df", "vasc"]), "cancer_label"] = 0
+    df["melanoma_label"] = (df["dx"] == "mel").astype(int)
+    # Retained as a backward-compatible alias for old artifacts.
+    df["binary_label"] = df["melanoma_label"]
     df["multiclass_label"] = df["dx"].astype(str)
     df = df[PROCESSED_COLUMNS]
 

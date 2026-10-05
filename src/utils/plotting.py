@@ -12,14 +12,16 @@ from sklearn.metrics import ConfusionMatrixDisplay, RocCurveDisplay
 from sklearn.tree import plot_tree
 
 
-def save_tree_plot(estimator, feature_names: list[str], path: str | Path) -> None:
+def save_tree_plot(
+    estimator, feature_names: list[str], path: str | Path, class_names: list[str] | tuple[str, ...] | None = None
+) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(20, 10))
     plot_tree(
         estimator,
         feature_names=feature_names,
-        class_names=["non_mel", "mel"],
+        class_names=list(class_names) if class_names is not None else None,
         filled=True,
         rounded=True,
         impurity=True,

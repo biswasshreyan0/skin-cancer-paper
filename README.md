@@ -1,110 +1,59 @@
-# ABCDE-Tree
+# ABCD-Tree
 
-ABCDE-Tree is a local research codebase for testing whether medical vision embeddings improve an interpretable melanoma decision tree beyond dermatologist-inspired ABCDE image features alone.
+ABCD-Tree evaluates whether computational single-image ABCD features, medical image embeddings, and clinical metadata improve cancer-versus-non-cancer classification on HAM10000. It is research software, not a diagnostic device.
 
-The main pipeline is:
+## Exact prediction target
 
-```text
-HAM10000 image
-  -> ABCDE feature extractor
-  -> medical/foundation-model image embedding extractor
-  -> feature fusion
-  -> shallow interpretable decision tree and ML baselines
-```
+The default task is `cancer_vs_non_cancer`:
 
-This project is for research purposes only. It is not approved for clinical diagnosis.
+- Positive (`cancer_label=1`): melanoma (`mel`) or basal cell carcinoma (`bcc`).
+- Negative (`cancer_label=0`): melanocytic nevus (`nv`), benign keratosis (`bkl`), dermatofibroma (`df`), or vascular lesion (`vasc`).
+- Excluded: `akiec`, because the [HAM10000 paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC6091241/) combines actinic keratoses with intraepithelial carcinoma in one label. That mixed category cannot be assigned honestly to either side of a strict cancer/non-cancer target.
 
-Clinical deployment would require external validation, dermatologist comparison, bias testing across skin tones and patient populations, prospective validation, clinical workflow testing, and regulatory review.
+The optional `--task melanoma` target is melanoma versus all other diagnoses. `--task multiclass` predicts the seven original diagnostic categories. The deprecated `--task binary` spelling maps to the melanoma task so older commands cannot silently change meaning.
 
-Black-box models may face greater transparency, documentation, human-oversight, and risk-management burdens in high-risk clinical AI settings. Interpretable models may make clinician oversight and model review easier.
+Every final Table 1 row repeats the target definition, positive and negative diagnoses, excluded diagnoses, decision threshold, command, Git commit, dirty-worktree status, and held-out prediction path.
 
-## License and Third-Party Materials
+## ABCD feature scope
 
-The source code is licensed under [Apache-2.0](LICENSE). The HAM10000 dataset, pretrained model weights, and
-third-party packages are not included under that license. Download or use them only under their respective licenses,
-terms of use, and access requirements. See [NOTICE](NOTICE) for details.
+The handcrafted features cover asymmetry, border, color, and a normalized diameter fraction. Evolution (E) is not used because HAM10000 provides no longitudinal observations of the same lesion over time.
 
-## Scientific Motivation
+The [American Academy of Dermatology](https://www.aad.org/public/diseases/skin-cancer/abcdes-melanoma) describes the clinical D warning sign as usually greater than 6 mm while noting that melanomas can be smaller. HAM10000 has no physical pixel-to-millimeter calibration, so the code does not fabricate a 6 mm feature. `diameter_fraction` is the lesion bounding-box diameter divided by the 224-pixel analysis width; it is an image-space proxy, not a millimeter measurement.
 
-This project compares several ways of representing and classifying dermatoscopic images from the
-[HAM10000 dataset](https://arxiv.org/abs/1803.10417). It supports binary melanoma detection (`mel` versus all
-other diagnoses) and seven-class diagnosis prediction. The data is split reproducibly into training, validation,
-and test partitions by `lesion_id`, so images of the same lesion cannot appear in more than one partition. Models
-are fitted only on training data, tuning and early stopping use validation data, and final metrics are reported on
-the held-out test data.
+## Evaluation design
 
-The tabular experiments compare logistic regression, KNN, a shallow class-balanced decision tree, random forest,
-and optional XGBoost, LightGBM, and CatBoost models. Each model is trained on the same prepared representations:
-downsampled 25×25 image pixels, computational ABCD-style features, foundation-model image embeddings, clinical
-metadata, and combinations of those inputs. Imputation, scaling, one-hot encoding, and PCA are fitted on the
-training split only and then applied unchanged to validation and test data, avoiding preprocessing leakage.
+The default run uses three layers of leakage control and uncertainty reporting:
 
-The project also trains neural baselines: RNN, LSTM, and Transformer encoders over prepared feature sequences;
-RNN, LSTM, Transformer, and compact ViT models over raw image pixels; and a ResNet18 CNN baseline. These models
-learn their parameters from the training images with validation-based early stopping. All model families write their
-predictions and metrics to the same output structure, allowing direct comparison of predictive performance and,
-for the shallow decision tree, inspection of its learned decision rules.
+1. Images are grouped by `lesion_id`; a lesion can appear in only one partition or fold.
+2. A fixed 80/10/10 train/validation/test split provides the untouched final 10% holdout and its saved predictions.
+3. The combined 90% development set undergoes three repeats of nested five-fold `StratifiedGroupKFold`. Hyperparameters are selected on an inner grouped split, preprocessing is refit inside each outer fold, and every outer-fold prediction is saved.
 
-The main experimental question is:
+Table 1 contains final held-out metrics and repeated-CV mean ± standard deviation for the tabular model/feature-set comparisons. The computationally expensive neural baselines are reported separately in `leaderboard.csv` and are not mixed into Table 1 without repeated-CV uncertainty estimates. `ablation_table.csv` compares the same selected model across each feature set. `statistical_tests.csv` contains paired two-sided Wilcoxon tests across outer folds, including model-to-model and feature-ablation comparisons, with Holm-adjusted p-values. These tests are exploratory and should be interpreted with effect sizes and the limited number of folds in mind.
 
-> How can we design a novel, reliable method for predicting skin-lesion diagnoses from images?
+The final held-out test set is never used by cross-validation or hyperparameter selection.
 
-## Environment
+## Class imbalance
 
-This guide has been tested for **Ubuntu or WSL2 (Ubuntu)** with **Python 3.10**. An NVIDIA GPU is recommended but not required; CPU runs work but can take much longer. The first run needs an internet connection to download the image-embedding model.
+The default `--imbalance_strategy hybrid` uses inverse-frequency class weights for decision trees, logistic regression, random forest, XGBoost, LightGBM, CatBoost, and neural losses. KNN, which has no class-weight interface, receives random oversampling performed on the training partition only. Validation and test distributions are never resampled. Alternatives are `class_weight`, `oversample`, and `none`.
 
-### 1. Get the code
+## Image resolution
 
-If you have not already downloaded the project, open a terminal and run:
+The former 25×25 flattened-pixel baseline has been removed from the final experiment. Raw RNN/LSTM/Transformer/ViT models now receive 224×224 images, as does ResNet18. BiomedCLIP preprocessing also uses its native 224×224 input.
 
-```bash
-git clone https://github.com/biswasshreyan0/skin-cancer-paper.git
-cd skin-cancer-paper
-```
+Flattening 224×224 RGB images for classical tabular models would create 150,528 columns per image, consume substantial memory, and discard spatial structure. The 224×224 comparisons therefore use image-native neural architectures and embeddings rather than a flattened tabular matrix.
 
-If you already have the project, open a terminal in the folder containing `README.md`. All commands below must be run from that folder.
+## Setup
 
-### 2. Create the Python environment
-
-Target platform:
-
-- WSL Ubuntu
-- Conda
-- Python 3.10
-- NVIDIA GPU with 8 GB VRAM recommended for the full pipeline
-
-Create and activate the environment:
+Tested on Ubuntu/WSL2 with Python 3.10. An NVIDIA GPU is strongly recommended for embeddings and 224×224 neural models.
 
 ```bash
 conda create -n skinai python=3.10 -y
 conda activate skinai
-```
-
-Install PyTorch with CUDA support:
-
-```bash
 pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
-```
-
-Install the remaining dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
-Verify that PyTorch can see the GPU:
-
-```bash
-python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'not detected')"
-```
-
-An RTX 4060 with 8 GB VRAM should be enough for embedding extraction with `--batch_size 8`. If CUDA runs out of memory, use `--batch_size 4`.
-
-If CUDA is not available, you can still run the project on CPU by adding `--device cpu --batch_size 2` to the commands below. Expect it to be substantially slower.
-
-## Dataset
-
-Follow the beginner-friendly download instructions in [DOWNLOAD_DATA.md](DOWNLOAD_DATA.md). When complete, your files should look like this:
+Download HAM10000 using [DOWNLOAD_DATA.md](DOWNLOAD_DATA.md). The expected hierarchy is:
 
 ```text
 data/HAM10000/
@@ -113,200 +62,89 @@ data/HAM10000/
     HAM10000_images_part_2/
 ```
 
-The loader creates:
+## Full reproducible experiment
 
-- `binary_label = 1` for `dx == "mel"`
-- `binary_label = 0` otherwise
-- `multiclass_label = dx`
+Commit the code before the paper run so `run_manifest.json` and every Table 1 row identify an immutable revision. Then run:
 
-Processed metadata is saved to:
-
-```text
-data/processed/ham10000_metadata_processed.csv
+```bash
+python scripts/train_all.py \
+    --dataset ham10000 \
+    --data_root data/HAM10000 \
+    --embedding_model_name microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 \
+    --out_dir outputs_cancer \
+    --shared_split_dir splits/table1 \
+    --task cancer \
+    --device cuda \
+    --batch_size 8 \
+    --pca_dim 64 \
+    --imbalance_strategy hybrid \
+    --raw_image_size 224 \
+    --raw_image_batch_size 16 \
+    --sequence_feature_sets abcd embeddings metadata abcd_metadata embeddings_metadata abcd_embeddings abcd_pca_embeddings abcd_embeddings_metadata \
+    --cv_folds 5 \
+    --cv_repeats 3 \
+    --cnn_pretrained \
+    --require_clean_git
 ```
 
-Splits are made by `lesion_id`, not `image_id`, so multiple images of the same lesion cannot leak across train, validation, and test.
+This is intentionally expensive: repeated nested CV multiplies every tabular feature/model fit by 15 outer folds plus inner hyperparameter searches. The 224×224 neural models are trained once for the fixed held-out experiment, not in every CV fold. If 8 GB of VRAM is insufficient, reduce `--raw_image_batch_size` to 8 or 4 and `--batch_size` to 4; this changes throughput but not the target or split membership.
 
-## Run
-
-### First run: fast sanity check
-
-This first command checks that the dataset, feature extraction, embeddings, and classical models work. It skips the slower neural models:
+A quick end-to-end structural check is:
 
 ```bash
 python scripts/train_all.py \
     --data_root data/HAM10000 \
-    --out_dir outputs \
-    --batch_size 8 \
-    --pca_dim 64 \
+    --out_dir outputs_smoke \
+    --task cancer \
     --tabular_models decision_tree \
+    --cv_models decision_tree \
+    --cv_folds 2 \
+    --cv_repeats 1 \
     --skip_sequence_models \
     --skip_raw_image_models \
     --skip_cnn
 ```
 
-On success, you will see files such as `outputs/reports/leaderboard.csv` and `outputs/figures/decision_tree.png`.
-
-### Full experiment
-
-This trains the classical and neural models. It may take hours and requires considerably more GPU memory, disk space, and time than the sanity check:
-
-```bash
-python scripts/train_all.py \
-    --dataset ham10000 \
-    --data_root data/HAM10000 \
-    --embedding_model_name microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 \
-    --out_dir outputs \
-    --task binary \
-    --batch_size 8 \
-    --pca_dim 64
-```
-
-By default this trains:
-
-- Classical tabular baselines on all prepared feature sets, including `raw25_pixels`
-- Feature-sequence RNN, LSTM, and Transformer baselines on `abcde_embeddings`
-- Raw-image RNN, LSTM, Transformer, and ViT baselines
-- CNN ResNet18 baseline
-
-To train the sequence baselines on additional prepared feature sets:
-
-```bash
-python scripts/train_all.py \
-    --dataset ham10000 \
-    --data_root data/HAM10000 \
-    --embedding_model_name microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 \
-    --out_dir outputs \
-    --task binary \
-    --batch_size 8 \
-    --pca_dim 64 \
-    --sequence_feature_sets abcde embeddings abcde_embeddings abcde_pca_embeddings abcde_embeddings_metadata
-```
-
-### Complete GPU experiment
-
-To train every model family and evaluate the feature-sequence RNN, LSTM, and Transformer on every prepared feature set, run:
-
-```bash
-python scripts/train_all.py \
-    --dataset ham10000 \
-    --data_root data/HAM10000 \
-    --embedding_model_name microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224 \
-    --out_dir outputs_all_gpu \
-    --task binary \
-    --batch_size 8 \
-    --pca_dim 64 \
-    --device cuda \
-    --sequence_feature_sets raw25_pixels abcde embeddings abcde_embeddings abcde_pca_embeddings metadata abcde_embeddings_metadata
-```
-
-This writes the combined comparison to `outputs_all_gpu/reports/leaderboard.csv` and detailed metrics to `outputs_all_gpu/reports/metrics.json`. The neural sequence and raw-image models use CUDA; classical models use their own available backend.
-
-Use `--skip_sequence_models` for a faster run with only the classical tabular baselines.
-Use `--skip_raw_image_models` to skip raw-image RNN/LSTM/Transformer/ViT, and `--skip_cnn` to skip CNN.
-
-Use `--force_recompute_embeddings` to refresh cached embeddings and `--force_recompute_abcde` to refresh cached ABCDE features.
-
-## Models
-
-Tabular models:
-
-- Decision tree
-- Logistic regression
-- KNN
-- Random forest
-- XGBoost, when installed
-- LightGBM, when installed
-- CatBoost, when installed
-
-Neural feature-sequence baselines:
-
-- RNN
-- LSTM
-- Transformer encoder
-
-Raw image neural baselines:
-
-- Raw-image RNN
-- Raw-image LSTM
-- Raw-image Transformer
-- Compact ViT
-- Torchvision ResNet18 with a frozen backbone and trained classifier head
-
-Supported embedding model names include:
-
-- `microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224`
-- `openai/clip-vit-base-patch32`
-- `medclip:default` or `medclip-vit:default`, when the optional `medclip` package is installed
-
-The embedding loader uses OpenCLIP for BiomedCLIP-style models and Hugging Face `AutoProcessor`/`AutoModel`
-for standard vision models. Some Hub repositories, including `yyupenn/whylesionclip`, may not expose weights in
-a format this loader can consume directly.
-
-## Outputs
-
-The pipeline writes:
+## Outputs and provenance
 
 ```text
-outputs/
-    embeddings/      cached foundation-model embeddings
-    features/        cached ABCDE features
-    models/          trained models and fitted feature transforms
-    reports/         metrics, leaderboard, rules, coefficients, importances
-    splits/          train.csv, val.csv, test.csv
-    predictions/     per-model prediction CSVs
-    figures/         confusion matrices, ROC curves, tree plots
+outputs_cancer/
+    embeddings/                      cached foundation-model embeddings
+    features/                        cached single-image ABCD features
+    models/                          trained models and fitted transforms
+    predictions/                     final held-out predictions
+        cross_validation/            outer-fold predictions for every CV run
+    splits/                          exact full split files used in the run
+    reports/
+        table1_final_results.csv     final Table 1 with target and provenance per row
+        table1_provenance.json       Table 1 command, commit, and held-out split hash
+        metrics.json                 aggregate and per-class metrics
+        leaderboard.csv              compact final-holdout leaderboard
+        cv_fold_metrics.csv          one record per outer fold/model/feature set
+        cv_summary.csv               mean ± SD across repeated outer folds
+        cv_protocol.json             exact CV protocol
+        ablation_table.csv           fixed-model feature-set ablation
+        statistical_tests.csv        paired Wilcoxon comparisons
+        clinical_implications.md     result-aware clinical interpretation
+        run_manifest.json            command, commit, hardware, software, split hashes
 ```
 
-Key report files:
+Each validation and test metric record includes per-class precision, recall, F1, and one-vs-rest AUPRC. Each final prediction CSV includes `image_id`, `lesion_id`, original `dx`, exact target, true label, predicted label, and positive-class probability.
 
-- `outputs/reports/leaderboard.csv`
-- `outputs/reports/metrics.json`
-- `outputs/reports/tree_rules.txt`
-- `outputs/figures/decision_tree.png`
-- `outputs/reports/logistic_coefficients.csv`
-- `outputs/reports/feature_importances.csv`
+Repository-safe split manifests are written to [`splits/table1/`](splits/table1/). They omit machine-specific image paths and include SHA-256 digests plus lesion-overlap counts.
 
-Print a compact leaderboard:
+## Computational cost and hardware reporting
 
-```bash
-python scripts/make_report.py --out_dir outputs
-```
+Runtime depends heavily on GPU, CPU core count, optional boosting libraries, and whether embeddings are cached. The first run must download and execute BiomedCLIP; later runs reuse its embeddings. Nested tabular CV is mostly CPU-bound. The raw 224×224 models, ResNet18, and embedding extraction are GPU-bound. Running all optional boosters and all sequence feature sets can take many hours and may take more than a day on a laptop CPU.
 
-## Helpful commands
+Rather than publishing a hardware-independent time estimate, the pipeline measures wall-clock training time for every final model and CV fold. `run_manifest.json` records CPU count, RAM, GPU name, CUDA version, Python version, and key package versions. Table 1 includes per-model training seconds; `cv_summary.csv` reports CV training-time mean and standard deviation. Peak GPU memory is not currently measured, so it must not be inferred from these files.
 
-Prepare the dataset metadata and reproducible train/validation/test splits without training models:
+## Clinical interpretation limits
 
-```bash
-python scripts/prepare_ham10000.py --data_root data/HAM10000 --out_dir outputs
-```
+False negatives can delay biopsy or treatment; false positives can cause anxiety, referral, and unnecessary biopsy. The default 0.5 threshold is a reproducible research threshold, not a clinically optimized operating point. Any proposed deployment requires external and prospective validation, calibration and threshold selection for the intended workflow, dermatologist comparison, subgroup analysis across skin tones and populations, out-of-distribution testing, human-factors evaluation, and regulatory review.
 
-Extract (or reuse) the cached ABCDE features and image embeddings:
+HAM10000 is a selected dermoscopy dataset, not a population-screening cohort. Results do not establish safety on smartphone photographs, primary-care populations, rare diagnoses, or lesions outside its seven categories.
 
-```bash
-python scripts/extract_features.py --data_root data/HAM10000 --out_dir outputs --device cuda
-```
+## License
 
-Run decision-tree experiments only:
-
-```bash
-python scripts/train_decision_trees.py --data_root data/HAM10000 --out_dir outputs --device cuda
-```
-
-Sweep readable decision-tree configurations and save the best rules:
-
-```bash
-python scripts/train_readable_tree_sweep.py --data_root data/HAM10000 --out_dir outputs --device cuda
-```
-
-Compare logistic regression, KNN, and MLP baselines; add `--run_cnn` to include the CNN:
-
-```bash
-python scripts/train_focused_comparison.py --data_root data/HAM10000 --out_dir outputs --device cuda --run_cnn
-```
-
-View all options for the main training command:
-
-```bash
-python scripts/train_all.py --help
-```
+Source code is Apache-2.0. HAM10000, pretrained weights, and third-party packages retain their own licenses and terms; see [NOTICE](NOTICE).

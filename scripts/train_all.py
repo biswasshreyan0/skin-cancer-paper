@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""One-command ABCDE-Tree pipeline for HAM10000."""
+"""One-command ABCD/embedding pipeline for HAM10000."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -13,8 +14,9 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.ham10000 import load_ham10000
-from src.data.splits import make_lesion_splits
-from src.features.abcde import extract_abcde_dataframe
+from src.data.splits import export_repository_split_manifests, make_lesion_splits
+from src.data.targets import canonical_task, get_target_spec, prepare_task_dataframe
+from src.features.abcde import ABCD_FEATURE_COLUMNS, extract_abcd_dataframe
 from src.features.cache import (
     abcde_cache_path,
     embedding_cache_path,
@@ -25,16 +27,19 @@ from src.features.cache import (
 )
 from src.features.embeddings import extract_embeddings
 from src.features.fusion import build_feature_sets
+from src.reporting.table1 import write_final_table
+from src.training.cross_validation import run_repeated_group_cv
 from src.training.train_cnn import train_cnn_baseline
 from src.training.train_raw_image import train_raw_image_models
 from src.training.train_sequence import train_sequence_models
 from src.training.train_tabular import train_all_tabular
 from src.utils.io import ensure_dir, write_json
+from src.utils.provenance import collect_run_manifest
 from src.utils.seed import set_seed
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train ABCDE-Tree experiments on HAM10000.")
+    parser = argparse.ArgumentParser(description="Train lesion-grouped ABCD/embedding experiments on HAM10000.")
     parser.add_argument("--dataset", default="ham10000", choices=["ham10000"])
     parser.add_argument("--data_root", default="data/HAM10000")
     parser.add_argument(
@@ -42,12 +47,27 @@ def parse_args() -> argparse.Namespace:
         default="microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224",
     )
     parser.add_argument("--out_dir", default="outputs")
-    parser.add_argument("--task", default="binary", choices=["binary", "multiclass"])
+    parser.add_argument(
+        "--shared_split_dir",
+        default="splits/table1",
+        help="Repository-safe split manifests used by the final Table 1.",
+    )
+    parser.add_argument(
+        "--task",
+        default="cancer",
+        choices=["cancer", "melanoma", "multiclass", "binary"],
+        help="Prediction target. 'binary' is a deprecated alias for melanoma.",
+    )
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--pca_dim", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None)
-    parser.add_argument("--force_recompute_abcde", action="store_true")
+    parser.add_argument(
+        "--force_recompute_abcd",
+        "--force_recompute_abcde",
+        dest="force_recompute_abcd",
+        action="store_true",
+    )
     parser.add_argument("--force_recompute_embeddings", action="store_true")
     parser.add_argument("--skip_tabular", action="store_true", help="Reuse existing tabular metrics/leaderboard.")
     parser.add_argument("--tabular_models", nargs="+", default=None, help="Limit tabular training to selected models.")
@@ -56,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sequence_feature_sets",
         nargs="+",
-        default=["abcde_embeddings"],
+        default=["abcd_embeddings"],
         help="Prepared feature sets used by RNN/LSTM/Transformer baselines.",
     )
     parser.add_argument("--sequence_epochs", type=int, default=25)
@@ -70,30 +90,65 @@ def parse_args() -> argparse.Namespace:
         default=["raw_rnn", "raw_lstm", "raw_transformer", "vit"],
         help="Raw pixel neural models to train.",
     )
-    parser.add_argument("--raw_image_size", type=int, default=64)
+    parser.add_argument("--raw_image_size", type=int, default=224)
     parser.add_argument("--raw_image_epochs", type=int, default=8)
-    parser.add_argument("--raw_image_batch_size", type=int, default=64)
+    parser.add_argument("--raw_image_batch_size", type=int, default=16)
     parser.add_argument("--raw_image_lr", type=float, default=1e-3)
     parser.add_argument("--raw_image_patience", type=int, default=3)
     parser.add_argument("--run_cnn", action="store_true", help="Deprecated: CNN now runs by default unless skipped.")
     parser.add_argument("--skip_cnn", action="store_true")
     parser.add_argument("--cnn_epochs", type=int, default=5)
     parser.add_argument("--cnn_pretrained", action="store_true", help="Download/use pretrained ResNet18 weights.")
+    parser.add_argument(
+        "--imbalance_strategy",
+        default="hybrid",
+        choices=["hybrid", "class_weight", "oversample", "none"],
+        help="Hybrid uses class weights where supported and random oversampling for KNN.",
+    )
+    parser.add_argument("--cv_folds", type=int, default=5)
+    parser.add_argument("--cv_repeats", type=int, default=3)
+    parser.add_argument("--cv_models", nargs="+", default=None)
+    parser.add_argument("--skip_cross_validation", action="store_true")
+    parser.add_argument(
+        "--require_clean_git",
+        action="store_true",
+        help="Abort unless the experiment starts from a clean, committed worktree.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    args.task = canonical_task(args.task)
+    run_started = time.perf_counter()
     set_seed(args.seed)
     out_dir = Path(args.out_dir)
     for subdir in ["embeddings", "features", "models", "reports", "splits", "predictions", "figures"]:
         ensure_dir(out_dir / subdir)
 
-    df = load_ham10000(args.data_root)
+    target = get_target_spec(args.task)
+    df = prepare_task_dataframe(load_ham10000(args.data_root), args.task)
     df["image_id"] = df["image_id"].astype(str)
-    train_df, val_df, test_df = make_lesion_splits(df, out_dir, seed=args.seed)
+    train_df, val_df, test_df = make_lesion_splits(
+        df, out_dir, label_col=target.label_column, seed=args.seed
+    )
+    run_manifest = collect_run_manifest(sys.argv, out_dir, target.to_dict())
+    if args.require_clean_git and run_manifest["git_dirty"]:
+        raise RuntimeError(
+            "The worktree is dirty. Commit the experiment code and split manifests before the paper run."
+        )
+    export_repository_split_manifests(
+        train_df,
+        val_df,
+        test_df,
+        args.shared_split_dir,
+        label_col=target.label_column,
+        target=target.to_dict(),
+        seed=args.seed,
+    )
+    write_json(run_manifest, out_dir / "reports" / "run_manifest.json")
 
-    abcde_df = _get_abcde_features(df, out_dir, args.force_recompute_abcde)
+    abcde_df = _get_abcd_features(df, out_dir, args.force_recompute_abcd)
     embedding_cache = _get_embeddings(
         df,
         out_dir,
@@ -129,6 +184,7 @@ def main() -> None:
             task=args.task,
             seed=args.seed,
             model_names=args.tabular_models,
+            imbalance_strategy=args.imbalance_strategy,
         )
         if args.append_results:
             metrics = _merge_metrics(existing_metrics, metrics)
@@ -174,12 +230,13 @@ def main() -> None:
             patience=args.raw_image_patience,
             device=args.device,
         )
-        metrics.setdefault("pixels", {}).update(raw_metrics)
+        raw_feature_name = f"pixels_{args.raw_image_size}"
+        metrics.setdefault(raw_feature_name, {}).update(raw_metrics)
         leaderboard = _merge_leaderboards(leaderboard, raw_leaderboard)
         leaderboard.to_csv(out_dir / "reports" / "leaderboard.csv", index=False)
         write_json(metrics, out_dir / "reports" / "metrics.json")
 
-    if not args.skip_cnn:
+    if not args.skip_cnn and target.is_binary:
         cnn_metrics = train_cnn_baseline(
             train_df,
             val_df,
@@ -189,18 +246,41 @@ def main() -> None:
             epochs=args.cnn_epochs,
             seed=args.seed,
             pretrained=args.cnn_pretrained,
+            task=args.task,
+            device=args.device,
         )
-        metrics.setdefault("pixels", {})["cnn_resnet18"] = cnn_metrics
+        metrics.setdefault("pixels_224", {})["cnn_resnet18"] = cnn_metrics
         write_json(metrics, out_dir / "reports" / "metrics.json")
         cnn_row = {
-            "feature_set": "pixels",
+            "feature_set": "pixels_224",
             "model": "cnn_resnet18",
             **{key: cnn_metrics["test"].get(key) for key in leaderboard.columns if key not in {"feature_set", "model"}},
         }
         leaderboard = _merge_leaderboards(leaderboard, pd.DataFrame([cnn_row]))
         leaderboard.to_csv(out_dir / "reports" / "leaderboard.csv", index=False)
 
-    print(f"Done. Leaderboard: {out_dir / 'reports' / 'leaderboard.csv'}")
+    cv_summary = pd.DataFrame()
+    if not args.skip_cross_validation:
+        development_df = pd.concat([train_df, val_df], ignore_index=True)
+        _, cv_summary = run_repeated_group_cv(
+            development_df,
+            abcde_df,
+            embedding_cache,
+            out_dir=out_dir,
+            task=args.task,
+            pca_dim=args.pca_dim,
+            seed=args.seed,
+            folds=args.cv_folds,
+            repeats=args.cv_repeats,
+            model_names=args.cv_models or args.tabular_models,
+            imbalance_strategy=args.imbalance_strategy,
+        )
+
+    run_manifest["total_pipeline_seconds"] = time.perf_counter() - run_started
+    write_json(run_manifest, out_dir / "reports" / "run_manifest.json")
+    write_final_table(leaderboard, metrics, out_dir, target, run_manifest, cv_summary=cv_summary)
+
+    print(f"Done. Final Table 1: {out_dir / 'reports' / 'table1_final_results.csv'}")
 
 
 def _merge_leaderboards(*leaderboards: pd.DataFrame) -> pd.DataFrame:
@@ -236,12 +316,17 @@ def _merge_metrics(base: dict, new: dict) -> dict:
     return merged
 
 
-def _get_abcde_features(df: pd.DataFrame, out_dir: Path, force: bool) -> pd.DataFrame:
+def _get_abcd_features(df: pd.DataFrame, out_dir: Path, force: bool) -> pd.DataFrame:
     path = abcde_cache_path(out_dir)
     cached = None if force else load_abcde_cache(path)
-    if cached is not None and set(cached["image_id"].astype(str)) >= set(df["image_id"].astype(str)):
+    required_columns = {"image_id", *ABCD_FEATURE_COLUMNS}
+    if (
+        cached is not None
+        and required_columns <= set(cached.columns)
+        and set(cached["image_id"].astype(str)) >= set(df["image_id"].astype(str))
+    ):
         return cached
-    abcde_df = extract_abcde_dataframe(df["image_path"], df["image_id"])
+    abcde_df = extract_abcd_dataframe(df["image_path"], df["image_id"])
     save_abcde_cache(abcde_df, path)
     return abcde_df
 

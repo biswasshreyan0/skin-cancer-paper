@@ -1,0 +1,64 @@
+{
+  "target": {
+    "name": "cancer_vs_non_cancer",
+    "label_column": "cancer_label",
+    "description": "Cancer (melanoma or basal cell carcinoma) versus non-cancer (nevus, benign keratosis, dermatofibroma, or vascular lesion). The mixed akiec category is excluded because it combines actinic keratoses with intraepithelial carcinoma.",
+    "class_names": [
+      "non_cancer",
+      "cancer"
+    ],
+    "positive_diagnoses": [
+      "mel",
+      "bcc"
+    ],
+    "negative_diagnoses": [
+      "nv",
+      "bkl",
+      "df",
+      "vasc"
+    ],
+    "excluded_diagnoses": [
+      "akiec"
+    ]
+  },
+  "group_column": "lesion_id",
+  "split_seed": 42,
+  "columns": [
+    "image_id",
+    "lesion_id",
+    "cancer_label",
+    "multiclass_label",
+    "dx"
+  ],
+  "partitions": {
+    "train": {
+      "file": "train.csv",
+      "rows": 7771,
+      "unique_image_id": 7771,
+      "unique_lesion_id": 5793,
+      "positive_images": 1314,
+      "sha256": "8f4290cde9728f4dbfd678a59e11524c1196da0810c0f8abef7cc642f083ee04"
+    },
+    "val": {
+      "file": "val.csv",
+      "rows": 964,
+      "unique_image_id": 964,
+      "unique_lesion_id": 724,
+      "positive_images": 166,
+      "sha256": "22e9e3d15a69e13fb52e514f11dbfe1e7c7b31617f5a6cb762e16a8cc5e5b097"
+    },
+    "test": {
+      "file": "test.csv",
+      "rows": 953,
+      "unique_image_id": 953,
+      "unique_lesion_id": 725,
+      "positive_images": 147,
+      "sha256": "bd3c49c213e04a393b6ec4fa20e67c27e18485a7d5f9ee2c1f6369801775bf8c"
+    }
+  },
+  "lesion_id_overlap_counts": {
+    "train_val": 0,
+    "train_test": 0,
+    "val_test": 0
+  }
+}

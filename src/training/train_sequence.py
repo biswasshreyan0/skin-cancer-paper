@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 
+from src.data.targets import get_target_spec
 from src.features.fusion import FeatureSet
 from src.models.sequence import FeatureLSTMClassifier, FeatureRNNClassifier, FeatureTransformerClassifier
 from src.utils.io import ensure_dir
@@ -21,7 +23,7 @@ def train_sequence_models(
     val_df: pd.DataFrame,
     test_df: pd.DataFrame,
     out_dir: str | Path,
-    task: str = "binary",
+    task: str = "cancer",
     seed: int = 42,
     feature_set_names: list[str] | None = None,
     epochs: int = 25,
@@ -42,7 +44,8 @@ def train_sequence_models(
     np.random.seed(seed)
     resolved_device = _resolve_device(device)
 
-    label_col = "binary_label" if task == "binary" else "multiclass_label"
+    target = get_target_spec(task)
+    label_col = target.label_column
     y_train_raw = train_df[label_col].to_numpy()
     y_val_raw = val_df[label_col].to_numpy()
     y_test_raw = test_df[label_col].to_numpy()
@@ -51,7 +54,7 @@ def train_sequence_models(
     y_val = encoder.transform(y_val_raw)
     y_test = encoder.transform(y_test_raw)
     n_classes = len(encoder.classes_)
-    selected_features = feature_set_names or ["abcde_embeddings"]
+    selected_features = feature_set_names or ["abcd_embeddings"]
 
     specs = {
         "rnn": FeatureRNNClassifier,
@@ -68,6 +71,7 @@ def train_sequence_models(
         metrics[feature_name] = {}
         loaders = _make_loaders(feature_set, y_train, y_val, y_test, batch_size)
         for model_name, model_cls in specs.items():
+            started = time.perf_counter()
             print(
                 f"[train_sequence] Fitting {feature_name}/{model_name} on {resolved_device}: "
                 f"train={feature_set.X_train.shape}, val={feature_set.X_val.shape}, test={feature_set.X_test.shape}",
@@ -91,11 +95,18 @@ def train_sequence_models(
             y_pred_encoded = np.argmax(test_prob_encoded, axis=1)
             y_pred = encoder.inverse_transform(y_pred_encoded)
             y_true = y_test_raw
-            test_metrics = _score(y_true, y_pred, y_prob, task)
+            test_metrics = _score(y_true, y_pred, y_prob, task, class_labels=encoder.classes_)
             val_labels, val_prob_encoded = _predict(model, loaders["val"], resolved_device)
             val_pred = encoder.inverse_transform(np.argmax(val_prob_encoded, axis=1))
             val_true = encoder.inverse_transform(val_labels)
-            val_metrics = _score(val_true, val_pred, _positive_or_matrix_probability(val_prob_encoded, task), task)
+            val_metrics = _score(
+                val_true,
+                val_pred,
+                _positive_or_matrix_probability(val_prob_encoded, task),
+                task,
+                class_labels=encoder.classes_,
+            )
+            training_seconds = time.perf_counter() - started
 
             model_path = out_dir / "models" / f"{feature_name}_{model_name}.pt"
             torch.save(
@@ -117,6 +128,9 @@ def train_sequence_models(
                     "lr": lr,
                     "patience": patience,
                 },
+                "target": target.to_dict(),
+                "imbalance_strategy": "class_weight",
+                "training_seconds": training_seconds,
                 "validation_selection_score": best_val_score,
                 "validation": val_metrics,
                 "test": test_metrics,
@@ -127,9 +141,10 @@ def train_sequence_models(
                 y_pred,
                 y_prob,
                 out_dir / "predictions" / f"{feature_name}_{model_name}_predictions.csv",
+                target,
             )
             _save_eval_figures(feature_name, model_name, y_true, y_pred, y_prob, out_dir)
-            rows.append(_leaderboard_row(feature_name, model_name, test_metrics))
+            rows.append(_leaderboard_row(feature_name, model_name, test_metrics, training_seconds))
             print(
                 f"[train_sequence] Finished {feature_name}/{model_name}: "
                 f"best_val_score={best_val_score:.4f}, test_auc={test_metrics.get('ROC-AUC')}",
@@ -180,7 +195,13 @@ def _fit_one_model(
 
         val_labels, val_prob = _predict(model, val_loader, device)
         val_pred = np.argmax(val_prob, axis=1)
-        score = _selection_score(val_labels, val_pred, _positive_or_matrix_probability(val_prob, task), task)
+        score = _selection_score(
+            val_labels,
+            val_pred,
+            _positive_or_matrix_probability(val_prob, task),
+            task,
+            class_labels=np.arange(n_classes),
+        )
         if score > best_score:
             best_score = float(score)
             best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
@@ -249,14 +270,14 @@ def _class_weights(y: np.ndarray, n_classes: int):
 
 
 def _positive_or_matrix_probability(probabilities: np.ndarray, task: str) -> np.ndarray:
-    if task == "binary" and probabilities.shape[1] == 2:
+    if get_target_spec(task).is_binary and probabilities.shape[1] == 2:
         return probabilities[:, 1]
     return probabilities
 
 
-def _selection_score(y_true, y_pred, y_prob, task: str) -> float:
-    metrics = _score(y_true, y_pred, y_prob, task)
-    if task == "binary":
+def _selection_score(y_true, y_pred, y_prob, task: str, class_labels=None) -> float:
+    metrics = _score(y_true, y_pred, y_prob, task, class_labels=class_labels)
+    if get_target_spec(task).is_binary:
         score = metrics.get("ROC-AUC", np.nan)
     else:
         score = metrics.get("macro ROC-AUC", np.nan)
@@ -265,25 +286,34 @@ def _selection_score(y_true, y_pred, y_prob, task: str) -> float:
     return float(score)
 
 
-def _score(y_true, y_pred, y_prob, task: str) -> dict:
-    if task == "binary":
-        return binary_metrics(np.asarray(y_true), np.asarray(y_pred), np.asarray(y_prob))
-    return multiclass_metrics(np.asarray(y_true), np.asarray(y_pred), np.asarray(y_prob))
+def _score(y_true, y_pred, y_prob, task: str, class_labels=None) -> dict:
+    target = get_target_spec(task)
+    if target.is_binary:
+        return binary_metrics(
+            np.asarray(y_true), np.asarray(y_pred), np.asarray(y_prob), class_names=target.class_names
+        )
+    return multiclass_metrics(
+        np.asarray(y_true), np.asarray(y_pred), np.asarray(y_prob), class_labels=class_labels
+    )
 
 
-def _save_predictions(df, y_true, y_pred, y_prob, path: Path) -> None:
+def _save_predictions(df, y_true, y_pred, y_prob, path: Path, target) -> None:
     if np.asarray(y_prob).ndim == 1:
         probability = y_prob
     else:
         probability = np.max(y_prob, axis=1)
-    pd.DataFrame(
-        {
-            "image_id": df["image_id"].to_numpy(),
-            "true_label": y_true,
-            "predicted_label": y_pred,
-            "probability": probability,
-        }
-    ).to_csv(path, index=False)
+    data = {
+        "image_id": df["image_id"].to_numpy(),
+        "lesion_id": df["lesion_id"].to_numpy(),
+        "dx": df["dx"].to_numpy(),
+        "target": target.name,
+        "true_label": y_true,
+        "predicted_label": y_pred,
+        "probability": probability,
+    }
+    if target.is_binary:
+        data[f"probability_{target.class_names[1]}"] = probability
+    pd.DataFrame(data).to_csv(path, index=False)
 
 
 def _save_eval_figures(feature_set, model_name, y_true, y_pred, y_prob, out_dir: Path) -> None:
@@ -298,7 +328,7 @@ def _save_eval_figures(feature_set, model_name, y_true, y_pred, y_prob, out_dir:
             pass
 
 
-def _leaderboard_row(feature_set: str, model_name: str, metrics: dict) -> dict:
+def _leaderboard_row(feature_set: str, model_name: str, metrics: dict, training_seconds: float) -> dict:
     return {
         "feature_set": feature_set,
         "model": model_name,
@@ -310,6 +340,8 @@ def _leaderboard_row(feature_set: str, model_name: str, metrics: dict) -> dict:
         "F1": metrics.get("F1"),
         "ROC-AUC": metrics.get("ROC-AUC"),
         "Average Precision": metrics.get("Average Precision"),
+        "AUPRC": metrics.get("Average Precision"),
+        "training_seconds": training_seconds,
         "macro F1": metrics.get("macro F1"),
         "weighted F1": metrics.get("weighted F1"),
         "macro ROC-AUC": metrics.get("macro ROC-AUC"),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Extract or reuse cached ABCDE features and medical image embeddings."""
+"""Extract or reuse cached ABCD features and medical image embeddings."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.ham10000 import load_ham10000
-from src.features.abcde import extract_abcde_dataframe
+from src.features.abcde import extract_abcd_dataframe
 from src.features.cache import (
     abcde_cache_path,
     embedding_cache_path,
@@ -29,18 +29,18 @@ def main() -> None:
     parser.add_argument("--embedding_model_name", default="yyupenn/whylesionclip")
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--device", default=None)
-    parser.add_argument("--force_recompute_abcde", action="store_true")
+    parser.add_argument("--force_recompute_abcd", "--force_recompute_abcde", dest="force_recompute_abcd", action="store_true")
     parser.add_argument("--force_recompute_embeddings", action="store_true")
     args = parser.parse_args()
 
     df = load_ham10000(args.data_root)
     abcde_path = abcde_cache_path(args.out_dir)
-    if args.force_recompute_abcde or load_abcde_cache(abcde_path) is None:
-        abcde_df = extract_abcde_dataframe(df["image_path"], df["image_id"])
+    if args.force_recompute_abcd or load_abcde_cache(abcde_path) is None:
+        abcde_df = extract_abcd_dataframe(df["image_path"], df["image_id"])
         save_abcde_cache(abcde_df, abcde_path)
-        print(f"Saved ABCDE features to {abcde_path}")
+        print(f"Saved ABCD features to {abcde_path}")
     else:
-        print(f"Using cached ABCDE features at {abcde_path}")
+        print(f"Using cached ABCD features at {abcde_path}")
 
     emb_path = embedding_cache_path(args.out_dir, args.embedding_model_name)
     if args.force_recompute_embeddings or load_embedding_cache(emb_path) is None:
