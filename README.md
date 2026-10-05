@@ -89,6 +89,8 @@ python scripts/train_all.py \
 
 This is intentionally expensive: repeated nested CV multiplies every tabular feature/model fit by 15 outer folds plus inner hyperparameter searches. The 224×224 neural models are trained once for the fixed held-out experiment, not in every CV fold. If 8 GB of VRAM is insufficient, reduce `--raw_image_batch_size` to 8 or 4 and `--batch_size` to 4; this changes throughput but not the target or split membership.
 
+The same command is safe to rerun after sleep, power loss, or interruption. Completed fixed-holdout stages are detected from `reports/metrics.json` and skipped automatically. Cross-validation writes `reports/cv_progress.csv` after every completed feature-set/model job and resumes those jobs on the next invocation; at most the job interrupted at the time is repeated. Use `--no_resume` to force a full recomputation.
+
 A quick end-to-end structural check is:
 
 ```bash

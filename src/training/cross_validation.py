@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -47,7 +48,33 @@ def run_repeated_group_cv(
     out_dir = Path(out_dir)
     reports_dir = ensure_dir(out_dir / "reports")
     prediction_root = ensure_dir(out_dir / "predictions" / "cross_validation")
-    rows: list[dict] = []
+    progress_path = reports_dir / "cv_progress.csv"
+    state_path = reports_dir / "cv_progress_state.json"
+    progress_state = {
+        "target": target.name,
+        "pca_dim": pca_dim,
+        "seed": seed,
+        "folds": folds,
+        "repeats": repeats,
+        "model_names": sorted(registry),
+        "imbalance_strategy": imbalance_strategy,
+        "development_images": len(development_df),
+        "development_lesions": int(development_df["lesion_id"].nunique()),
+    }
+    completed: dict[str, dict] = {}
+    try:
+        prior_state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError, TypeError, OSError):
+        prior_state = None
+    if prior_state == progress_state and progress_path.exists():
+        try:
+            prior_rows = pd.read_csv(progress_path).to_dict(orient="records")
+            completed = {str(row["job_key"]): row for row in prior_rows if row.get("job_key")}
+            print(f"[cross_validation] Resuming {len(completed)} completed jobs from {progress_path}", flush=True)
+        except (OSError, ValueError, KeyError):
+            completed = {}
+    write_json(progress_state, state_path)
+    rows: list[dict] = list(completed.values())
     y_all = development_df[label_col].to_numpy()
     groups = development_df["lesion_id"].to_numpy()
 
@@ -89,6 +116,11 @@ def run_repeated_group_cv(
             for feature_name, inner_feature_set in inner_sets.items():
                 outer_feature_set = outer_sets[feature_name]
                 for model_name, spec in registry.items():
+                    job_key = f"repeat_{repeat + 1:02d}_fold_{fold:02d}/{feature_name}/{model_name}"
+                    prediction_path = fold_dir / f"{feature_name}_{model_name}.csv"
+                    if job_key in completed and prediction_path.exists():
+                        print(f"[cross_validation] skipping completed {job_key}", flush=True)
+                        continue
                     print(
                         f"[cross_validation] repeat={repeat + 1}/{repeats} fold={fold}/{folds} "
                         f"{feature_name}/{model_name}",
@@ -141,16 +173,20 @@ def run_repeated_group_cv(
                             outer_val,
                         )
                     )
+                    rows[-1]["job_key"] = job_key
                     _save_fold_predictions(
                         outer_val,
                         y_outer_val,
                         y_pred,
                         y_prob,
-                        fold_dir / f"{feature_name}_{model_name}.csv",
+                        prediction_path,
                         target,
                         repeat + 1,
                         fold,
                     )
+                    # Persist after every completed model so Ctrl-C, sleep,
+                    # or power loss loses at most the currently running job.
+                    pd.DataFrame(rows).to_csv(progress_path, index=False)
 
     fold_metrics = pd.DataFrame(rows)
     fold_metrics.to_csv(reports_dir / "cv_fold_metrics.csv", index=False)

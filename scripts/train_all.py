@@ -27,6 +27,7 @@ from src.features.cache import (
 )
 from src.features.embeddings import extract_embeddings
 from src.features.fusion import build_feature_sets
+from src.models.registry import get_model_registry
 from src.reporting.table1 import write_final_table
 from src.training.cross_validation import run_repeated_group_cv
 from src.training.train_cnn import train_cnn_baseline
@@ -72,6 +73,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip_tabular", action="store_true", help="Reuse existing tabular metrics/leaderboard.")
     parser.add_argument("--tabular_models", nargs="+", default=None, help="Limit tabular training to selected models.")
     parser.add_argument("--append_results", action="store_true", help="Merge newly trained rows with existing reports.")
+    parser.add_argument(
+        "--no_resume",
+        dest="resume",
+        action="store_false",
+        help="Recompute completed stages/jobs instead of resuming from outputs_cancer progress files.",
+    )
+    parser.set_defaults(resume=True)
     parser.add_argument("--skip_sequence_models", action="store_true")
     parser.add_argument(
         "--sequence_feature_sets",
@@ -115,6 +123,18 @@ def parse_args() -> argparse.Namespace:
         help="Abort unless the experiment starts from a clean, committed worktree.",
     )
     return parser.parse_args()
+
+
+def _has_models(metrics: dict, required: dict[str, list[str]]) -> bool:
+    """Return True only when all requested model results are present."""
+    return all(
+        feature_name in metrics and all(model_name in metrics[feature_name] for model_name in model_names)
+        for feature_name, model_names in required.items()
+    )
+
+
+def _write_stage_progress(out_dir: Path, stages: dict[str, str]) -> None:
+    write_json(stages, out_dir / "reports" / "progress.json")
 
 
 def main() -> None:
@@ -169,11 +189,22 @@ def main() -> None:
     )
     existing_metrics = {}
     existing_leaderboard = pd.DataFrame()
-    if args.append_results:
+    reports_exist = (out_dir / "reports" / "metrics.json").exists() and (out_dir / "reports" / "leaderboard.csv").exists()
+    if reports_exist:
         existing_metrics, existing_leaderboard = _load_existing_results(out_dir)
+    progress = {}
+    tabular_registry = get_model_registry(args.seed, use_class_weights=args.imbalance_strategy in {"hybrid", "class_weight"})
+    requested_tabular_models = args.tabular_models or list(tabular_registry)
+    tabular_complete = _has_models(
+        existing_metrics,
+        {feature_name: requested_tabular_models for feature_name in feature_sets},
+    )
 
-    if args.skip_tabular:
+    if args.skip_tabular or (args.resume and tabular_complete):
+        if not reports_exist:
+            raise FileNotFoundError("Cannot resume tabular stage: metrics.json and leaderboard.csv are missing.")
         metrics, leaderboard = _load_existing_results(out_dir)
+        progress["tabular"] = "resumed/skipped"
     else:
         metrics, leaderboard = train_all_tabular(
             feature_sets,
@@ -191,8 +222,14 @@ def main() -> None:
             leaderboard = _merge_leaderboards(existing_leaderboard, leaderboard)
             leaderboard.to_csv(out_dir / "reports" / "leaderboard.csv", index=False)
             write_json(metrics, out_dir / "reports" / "metrics.json")
+        progress["tabular"] = "complete"
+    _write_stage_progress(out_dir, progress)
 
-    if not args.skip_sequence_models:
+    sequence_complete = _has_models(
+        metrics,
+        {feature_name: ["rnn", "lstm", "transformer"] for feature_name in args.sequence_feature_sets},
+    )
+    if not args.skip_sequence_models and not (args.resume and sequence_complete):
         sequence_metrics, sequence_leaderboard = train_sequence_models(
             feature_sets,
             train_df,
@@ -213,8 +250,14 @@ def main() -> None:
         leaderboard = _merge_leaderboards(leaderboard, sequence_leaderboard)
         leaderboard.to_csv(out_dir / "reports" / "leaderboard.csv", index=False)
         write_json(metrics, out_dir / "reports" / "metrics.json")
+        progress["sequence"] = "complete"
+    else:
+        progress["sequence"] = "resumed/skipped"
+    _write_stage_progress(out_dir, progress)
 
-    if not args.skip_raw_image_models:
+    raw_feature_name = f"pixels_{args.raw_image_size}"
+    raw_complete = _has_models(metrics, {raw_feature_name: args.raw_image_models})
+    if not args.skip_raw_image_models and not (args.resume and raw_complete):
         raw_metrics, raw_leaderboard = train_raw_image_models(
             train_df,
             val_df,
@@ -230,13 +273,17 @@ def main() -> None:
             patience=args.raw_image_patience,
             device=args.device,
         )
-        raw_feature_name = f"pixels_{args.raw_image_size}"
         metrics.setdefault(raw_feature_name, {}).update(raw_metrics)
         leaderboard = _merge_leaderboards(leaderboard, raw_leaderboard)
         leaderboard.to_csv(out_dir / "reports" / "leaderboard.csv", index=False)
         write_json(metrics, out_dir / "reports" / "metrics.json")
+        progress["raw_image"] = "complete"
+    else:
+        progress["raw_image"] = "resumed/skipped"
+    _write_stage_progress(out_dir, progress)
 
-    if not args.skip_cnn and target.is_binary:
+    cnn_complete = "pixels_224" in metrics and "cnn_resnet18" in metrics["pixels_224"]
+    if not args.skip_cnn and target.is_binary and not (args.resume and cnn_complete):
         cnn_metrics = train_cnn_baseline(
             train_df,
             val_df,
@@ -258,6 +305,10 @@ def main() -> None:
         }
         leaderboard = _merge_leaderboards(leaderboard, pd.DataFrame([cnn_row]))
         leaderboard.to_csv(out_dir / "reports" / "leaderboard.csv", index=False)
+        progress["cnn"] = "complete"
+    else:
+        progress["cnn"] = "resumed/skipped"
+    _write_stage_progress(out_dir, progress)
 
     cv_summary = pd.DataFrame()
     if not args.skip_cross_validation:
@@ -275,6 +326,10 @@ def main() -> None:
             model_names=args.cv_models or args.tabular_models,
             imbalance_strategy=args.imbalance_strategy,
         )
+        progress["cross_validation"] = "complete"
+    else:
+        progress["cross_validation"] = "skipped"
+    _write_stage_progress(out_dir, progress)
 
     run_manifest["total_pipeline_seconds"] = time.perf_counter() - run_started
     write_json(run_manifest, out_dir / "reports" / "run_manifest.json")
