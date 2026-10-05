@@ -294,13 +294,26 @@ def _save_knn_examples(
     rows = []
     for test_i, (dists, neighbor_indices) in enumerate(zip(distances, indices)):
         for rank, (dist, train_i) in enumerate(zip(dists, neighbor_indices), start=1):
+            # Random oversampling (used for KNN under ``hybrid``) can make the
+            # fitted matrix longer than the original training dataframe.  In
+            # that case there is no unique source image to report; retain the
+            # neighbor label from the fitted estimator and use an explicit
+            # synthetic row identifier instead of indexing past train_df.
+            train_i = int(train_i)
+            if train_i < len(train_df):
+                neighbor_image_id = train_df.iloc[train_i]["image_id"]
+                neighbor_label = train_df.iloc[train_i][label_col]
+            else:
+                neighbor_image_id = f"oversampled_train_row_{train_i}"
+                fitted_labels = getattr(model, "_y", None)
+                neighbor_label = fitted_labels[train_i] if fitted_labels is not None else np.nan
             rows.append(
                 {
                     "test_image_id": test_df.iloc[test_i]["image_id"],
                     "test_label": y_test[test_i],
                     "neighbor_rank": rank,
-                    "neighbor_image_id": train_df.iloc[int(train_i)]["image_id"],
-                    "neighbor_label": train_df.iloc[int(train_i)][label_col],
+                    "neighbor_image_id": neighbor_image_id,
+                    "neighbor_label": neighbor_label,
                     "distance": float(dist),
                 }
             )
