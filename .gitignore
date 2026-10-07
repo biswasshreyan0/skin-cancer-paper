@@ -36,6 +36,10 @@ sample/
 outputs/
 /outputs_*/
 
+# Generated handoff bundle and summary
+abcde_tree_handoff_*.zip
+HANDOFF_SUMMARY.md
+
 # Local model and framework caches
 .cache/
 *.pt
