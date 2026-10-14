@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 
 
 class ImageClassificationDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, label_col: str = "binary_label", transform=None):
+    def __init__(self, df: pd.DataFrame, label_col: str = "cancer_label", transform=None):
         self.df = df.reset_index(drop=True)
         self.label_col = label_col
         self.transform = transform

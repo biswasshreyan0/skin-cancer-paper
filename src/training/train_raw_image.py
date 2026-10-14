@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 
 from src.data.dataset import ImageClassificationDataset
+from src.data.targets import get_target_spec
 from src.models.image_sequence import (
     ImageLSTMClassifier,
     ImageRNNClassifier,
@@ -25,12 +27,12 @@ def train_raw_image_models(
     val_df: pd.DataFrame,
     test_df: pd.DataFrame,
     out_dir: str | Path,
-    task: str = "binary",
+    task: str = "cancer",
     seed: int = 42,
     models: list[str] | None = None,
-    image_size: int = 64,
+    image_size: int = 224,
     epochs: int = 8,
-    batch_size: int = 64,
+    batch_size: int = 16,
     lr: float = 1e-3,
     patience: int = 3,
     device: str | None = None,
@@ -48,7 +50,8 @@ def train_raw_image_models(
     np.random.seed(seed)
     resolved_device = _resolve_device(device)
 
-    label_col = "binary_label" if task == "binary" else "multiclass_label"
+    target = get_target_spec(task)
+    label_col = target.label_column
     encoder = LabelEncoder()
     train_df = train_df.copy()
     val_df = val_df.copy()
@@ -101,8 +104,10 @@ def train_raw_image_models(
     for model_name in selected:
         if model_name not in specs:
             raise KeyError(f"Unknown raw image model: {model_name}")
+        feature_name = f"pixels_{image_size}"
+        started = time.perf_counter()
         print(
-            f"[train_raw_image] Fitting pixels/{model_name} on {resolved_device}: "
+            f"[train_raw_image] Fitting {feature_name}/{model_name} on {resolved_device}: "
             f"train={len(train_df)}, val={len(val_df)}, test={len(test_df)}",
             flush=True,
         )
@@ -127,8 +132,9 @@ def train_raw_image_models(
         test_true = encoder.inverse_transform(test_encoded)
         val_y_prob = _positive_or_matrix_probability(val_prob, task)
         test_y_prob = _positive_or_matrix_probability(test_prob, task)
-        val_metrics = _score(val_true, val_pred, val_y_prob, task)
-        test_metrics = _score(test_true, test_pred, test_y_prob, task)
+        val_metrics = _score(val_true, val_pred, val_y_prob, task, class_labels=encoder.classes_)
+        test_metrics = _score(test_true, test_pred, test_y_prob, task, class_labels=encoder.classes_)
+        training_seconds = time.perf_counter() - started
 
         torch.save(
             {
@@ -138,11 +144,11 @@ def train_raw_image_models(
                 "class_names": encoder.classes_.tolist(),
                 "state_dict": model.cpu().state_dict(),
             },
-            out_dir / "models" / f"pixels_{model_name}.pt",
+            out_dir / "models" / f"{feature_name}_{model_name}.pt",
         )
         model.to(resolved_device)
         metrics[model_name] = {
-            "feature_set": "pixels",
+            "feature_set": feature_name,
             "best_params": {
                 "image_size": image_size,
                 "epochs": epochs,
@@ -150,6 +156,9 @@ def train_raw_image_models(
                 "lr": lr,
                 "patience": patience,
             },
+            "target": target.to_dict(),
+            "imbalance_strategy": "class_weight",
+            "training_seconds": training_seconds,
             "validation_selection_score": best_val_score,
             "validation": val_metrics,
             "test": test_metrics,
@@ -159,12 +168,14 @@ def train_raw_image_models(
             test_true,
             test_pred,
             test_y_prob,
-            out_dir / "predictions" / f"pixels_{model_name}_predictions.csv",
+            out_dir / "predictions" / f"{feature_name}_{model_name}_predictions.csv",
+            test_df,
+            target,
         )
-        _save_eval_figures("pixels", model_name, test_true, test_pred, test_y_prob, out_dir)
-        rows.append(_leaderboard_row("pixels", model_name, test_metrics))
+        _save_eval_figures(feature_name, model_name, test_true, test_pred, test_y_prob, out_dir)
+        rows.append(_leaderboard_row(feature_name, model_name, test_metrics, training_seconds))
         print(
-            f"[train_raw_image] Finished pixels/{model_name}: "
+            f"[train_raw_image] Finished {feature_name}/{model_name}: "
             f"best_val_score={best_val_score:.4f}, test_auc={test_metrics.get('ROC-AUC')}",
             flush=True,
         )
@@ -201,7 +212,13 @@ def _fit_one_model(model, train_loader, val_loader, y_train, n_classes, task, ep
             seen += int(labels.numel())
         val_labels, val_prob, _ = _predict(model, val_loader, device)
         val_pred = np.argmax(val_prob, axis=1)
-        score = _selection_score(val_labels, val_pred, _positive_or_matrix_probability(val_prob, task), task)
+        score = _selection_score(
+            val_labels,
+            val_pred,
+            _positive_or_matrix_probability(val_prob, task),
+            task,
+            class_labels=np.arange(n_classes),
+        )
         if score > best_score:
             best_score = float(score)
             best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
@@ -255,35 +272,44 @@ def _class_weights(y: np.ndarray, n_classes: int):
 
 
 def _positive_or_matrix_probability(probabilities: np.ndarray, task: str) -> np.ndarray:
-    if task == "binary" and probabilities.shape[1] == 2:
+    if get_target_spec(task).is_binary and probabilities.shape[1] == 2:
         return probabilities[:, 1]
     return probabilities
 
 
-def _selection_score(y_true, y_pred, y_prob, task: str) -> float:
-    metrics = _score(y_true, y_pred, y_prob, task)
-    score = metrics.get("ROC-AUC" if task == "binary" else "macro ROC-AUC", np.nan)
+def _selection_score(y_true, y_pred, y_prob, task: str, class_labels=None) -> float:
+    metrics = _score(y_true, y_pred, y_prob, task, class_labels=class_labels)
+    score = metrics.get("ROC-AUC" if get_target_spec(task).is_binary else "macro ROC-AUC", np.nan)
     if not np.isfinite(score):
         score = metrics.get("balanced_accuracy", -np.inf)
     return float(score)
 
 
-def _score(y_true, y_pred, y_prob, task: str) -> dict:
-    if task == "binary":
-        return binary_metrics(np.asarray(y_true), np.asarray(y_pred), np.asarray(y_prob))
-    return multiclass_metrics(np.asarray(y_true), np.asarray(y_pred), np.asarray(y_prob))
+def _score(y_true, y_pred, y_prob, task: str, class_labels=None) -> dict:
+    target = get_target_spec(task)
+    if target.is_binary:
+        return binary_metrics(
+            np.asarray(y_true), np.asarray(y_pred), np.asarray(y_prob), class_names=target.class_names
+        )
+    return multiclass_metrics(
+        np.asarray(y_true), np.asarray(y_pred), np.asarray(y_prob), class_labels=class_labels
+    )
 
 
-def _save_predictions(image_ids, y_true, y_pred, y_prob, path: Path) -> None:
+def _save_predictions(image_ids, y_true, y_pred, y_prob, path: Path, df, target) -> None:
     probability = y_prob if np.asarray(y_prob).ndim == 1 else np.max(y_prob, axis=1)
-    pd.DataFrame(
-        {
-            "image_id": image_ids,
-            "true_label": y_true,
-            "predicted_label": y_pred,
-            "probability": probability,
-        }
-    ).to_csv(path, index=False)
+    data = {
+        "image_id": image_ids,
+        "lesion_id": df["lesion_id"].to_numpy(),
+        "dx": df["dx"].to_numpy(),
+        "target": target.name,
+        "true_label": y_true,
+        "predicted_label": y_pred,
+        "probability": probability,
+    }
+    if target.is_binary:
+        data[f"probability_{target.class_names[1]}"] = probability
+    pd.DataFrame(data).to_csv(path, index=False)
 
 
 def _save_eval_figures(feature_set, model_name, y_true, y_pred, y_prob, out_dir: Path) -> None:
@@ -298,7 +324,7 @@ def _save_eval_figures(feature_set, model_name, y_true, y_pred, y_prob, out_dir:
             pass
 
 
-def _leaderboard_row(feature_set: str, model_name: str, metrics: dict) -> dict:
+def _leaderboard_row(feature_set: str, model_name: str, metrics: dict, training_seconds: float) -> dict:
     return {
         "feature_set": feature_set,
         "model": model_name,
@@ -310,6 +336,8 @@ def _leaderboard_row(feature_set: str, model_name: str, metrics: dict) -> dict:
         "F1": metrics.get("F1"),
         "ROC-AUC": metrics.get("ROC-AUC"),
         "Average Precision": metrics.get("Average Precision"),
+        "AUPRC": metrics.get("Average Precision"),
+        "training_seconds": training_seconds,
         "macro F1": metrics.get("macro F1"),
         "weighted F1": metrics.get("weighted F1"),
         "macro ROC-AUC": metrics.get("macro ROC-AUC"),

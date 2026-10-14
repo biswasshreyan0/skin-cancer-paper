@@ -29,8 +29,16 @@ data/raw/
 data/HAM10000/
 data/processed/
 
+# Local one-off inspection example (not used by experiment runs)
+sample/
+
 # Generated experiment artifacts
 outputs/
+/outputs_*/
+
+# Generated handoff bundle and summary
+abcde_tree_handoff_*.zip
+HANDOFF_SUMMARY.md
 
 # Local model and framework caches
 .cache/

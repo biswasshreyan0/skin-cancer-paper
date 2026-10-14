@@ -1,4 +1,4 @@
-"""Model registry for tabular ABCDE/embedding experiments."""
+"""Model registry for tabular ABCD/embedding experiments."""
 
 from __future__ import annotations
 
@@ -18,16 +18,17 @@ class ModelSpec:
     optional: bool = False
 
 
-def get_model_registry(seed: int = 42) -> dict[str, ModelSpec]:
+def get_model_registry(seed: int = 42, use_class_weights: bool = True) -> dict[str, ModelSpec]:
+    class_weight = "balanced" if use_class_weights else None
     registry: dict[str, ModelSpec] = {
         "decision_tree": ModelSpec(
             name="decision_tree",
-            estimator=DecisionTreeClassifier(class_weight="balanced", random_state=seed),
+            estimator=DecisionTreeClassifier(class_weight=class_weight, random_state=seed),
             param_grid={"max_depth": [2, 3, 4, 5, 10, 15], "min_samples_leaf": [5, 10, 20]},
         ),
         "logistic_regression": ModelSpec(
             name="logistic_regression",
-            estimator=LogisticRegression(class_weight="balanced", max_iter=5000, random_state=seed),
+            estimator=LogisticRegression(class_weight=class_weight, max_iter=5000, random_state=seed),
             param_grid={"C": [0.1, 1.0, 10.0]},
         ),
         "knn": ModelSpec(
@@ -38,7 +39,7 @@ def get_model_registry(seed: int = 42) -> dict[str, ModelSpec]:
         "random_forest": ModelSpec(
             name="random_forest",
             estimator=RandomForestClassifier(
-                n_estimators=300, class_weight="balanced", random_state=seed, n_jobs=-1
+                n_estimators=300, class_weight=class_weight, random_state=seed, n_jobs=-1
             ),
             param_grid={"max_depth": [None, 5, 10]},
         ),
@@ -70,7 +71,7 @@ def get_model_registry(seed: int = 42) -> dict[str, ModelSpec]:
             name="lightgbm",
             estimator=LGBMClassifier(
                 n_estimators=300,
-                class_weight="balanced",
+                class_weight=class_weight,
                 random_state=seed,
                 n_jobs=-1,
                 verbose=-1,
@@ -84,15 +85,16 @@ def get_model_registry(seed: int = 42) -> dict[str, ModelSpec]:
     try:
         from catboost import CatBoostClassifier
 
+        catboost_weight_args = {"auto_class_weights": "Balanced"} if use_class_weights else {}
         registry["catboost"] = ModelSpec(
             name="catboost",
             estimator=CatBoostClassifier(
                 loss_function="Logloss",
                 eval_metric="AUC",
-                auto_class_weights="Balanced",
                 random_seed=seed,
                 verbose=False,
                 allow_writing_files=False,
+                **catboost_weight_args,
             ),
             param_grid={"depth": [4, 6], "learning_rate": [0.03, 0.05], "iterations": [300]},
             optional=True,

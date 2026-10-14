@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Focused model comparison: LR, KNN, MLP on ABCDE+embeddings, plus optional CNN."""
+"""Focused model comparison: LR, KNN, MLP on ABCD+embeddings, plus optional CNN."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.ham10000 import load_ham10000
 from src.data.splits import make_lesion_splits
+from src.data.targets import get_target_spec, prepare_task_dataframe
 from src.features.abcde import extract_abcde_dataframe
 from src.features.cache import (
     abcde_cache_path,
@@ -62,9 +63,12 @@ def main() -> None:
     for subdir in ["embeddings", "features", "models", "reports", "splits", "predictions", "figures"]:
         ensure_dir(out_dir / subdir)
 
-    df = load_ham10000(args.data_root)
+    target = get_target_spec("cancer")
+    df = prepare_task_dataframe(load_ham10000(args.data_root), "cancer")
     df["image_id"] = df["image_id"].astype(str)
-    train_df, val_df, test_df = make_lesion_splits(df, out_dir, seed=args.seed)
+    train_df, val_df, test_df = make_lesion_splits(
+        df, out_dir, label_col=target.label_column, seed=args.seed
+    )
     abcde_df = _get_abcde_features(df, out_dir, args.force_recompute_abcde)
     embedding_cache = _get_embeddings(
         df,
@@ -84,10 +88,10 @@ def main() -> None:
         out_dir=out_dir,
         pca_dim=args.pca_dim,
     )
-    fs = feature_sets["abcde_embeddings"]
-    y_train = train_df["binary_label"].to_numpy()
-    y_val = val_df["binary_label"].to_numpy()
-    y_test = test_df["binary_label"].to_numpy()
+    fs = feature_sets["abcd_embeddings"]
+    y_train = train_df[target.label_column].to_numpy()
+    y_val = val_df[target.label_column].to_numpy()
+    y_test = test_df[target.label_column].to_numpy()
 
     specs = {
         "logistic_regression": (
@@ -117,24 +121,24 @@ def main() -> None:
     metrics: dict[str, dict] = {}
     rows = []
     for model_name, (estimator, grid) in specs.items():
-        print(f"[focused] training {model_name} on abcde_embeddings {fs.X_train.shape}", flush=True)
+        print(f"[focused] training {model_name} on abcd_embeddings {fs.X_train.shape}", flush=True)
         model, params, val_score = _select_by_validation(estimator, grid, fs.X_train, y_train, fs.X_val, y_val)
-        test_metrics, y_pred, y_prob = evaluate_model(model, fs.X_test, y_test, task="binary")
+        test_metrics, y_pred, y_prob = evaluate_model(model, fs.X_test, y_test, task="cancer")
         metrics[model_name] = {
-            "feature_set": "abcde_embeddings",
+            "feature_set": "abcd_embeddings",
             "best_params": params,
             "validation_selection_score": val_score,
             "test": test_metrics,
         }
-        joblib.dump(model, out_dir / "models" / f"focused_abcde_embeddings_{model_name}.joblib")
+        joblib.dump(model, out_dir / "models" / f"focused_abcd_embeddings_{model_name}.joblib")
         _save_predictions(
             test_df,
             y_test,
             y_pred,
             y_prob,
-            out_dir / "predictions" / f"focused_abcde_embeddings_{model_name}_predictions.csv",
+            out_dir / "predictions" / f"focused_abcd_embeddings_{model_name}_predictions.csv",
         )
-        rows.append(_leaderboard_row("abcde_embeddings", model_name, test_metrics))
+        rows.append(_leaderboard_row("abcd_embeddings", model_name, test_metrics))
         print(f"[focused] finished {model_name}: test ROC-AUC={test_metrics.get('ROC-AUC'):.4f}", flush=True)
 
     if args.run_cnn:
@@ -148,9 +152,11 @@ def main() -> None:
             lr=args.cnn_lr,
             seed=args.seed,
             pretrained=not args.cnn_no_pretrained,
+            task="cancer",
+            device=args.device,
         )
-        metrics["cnn_resnet18"] = {"feature_set": "pixels", **cnn_metrics}
-        rows.append(_leaderboard_row("pixels", "cnn_resnet18", cnn_metrics["test"]))
+        metrics["cnn_resnet18"] = {"feature_set": "pixels_224", **cnn_metrics}
+        rows.append(_leaderboard_row("pixels_224", "cnn_resnet18", cnn_metrics["test"]))
 
     leaderboard = pd.DataFrame(rows).sort_values(
         by=["ROC-AUC", "balanced_accuracy"], ascending=False, na_position="last"
@@ -170,7 +176,7 @@ def _select_by_validation(estimator, param_grid, X_train, y_train, X_val, y_val)
         print(f"[focused]   params {idx}/{len(grids)}: {params}", flush=True)
         model = clone(estimator).set_params(**params)
         model.fit(X_train, y_train)
-        val_metrics, _, _ = evaluate_model(model, X_val, y_val, task="binary")
+        val_metrics, _, _ = evaluate_model(model, X_val, y_val, task="cancer")
         score = val_metrics.get("ROC-AUC", np.nan)
         if not np.isfinite(score):
             score = val_metrics.get("balanced_accuracy", -np.inf)

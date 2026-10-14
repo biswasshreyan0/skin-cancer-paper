@@ -9,7 +9,7 @@ from torch import nn
 class ImageRNNClassifier(nn.Module):
     """Read each grayscale image row as one sequence step."""
 
-    def __init__(self, image_size: int = 64, n_classes: int = 2, hidden_size: int = 96, dropout: float = 0.1) -> None:
+    def __init__(self, image_size: int = 224, n_classes: int = 2, hidden_size: int = 96, dropout: float = 0.1) -> None:
         super().__init__()
         self.rnn = nn.RNN(input_size=image_size, hidden_size=hidden_size, batch_first=True)
         self.head = _Head(hidden_size, n_classes, dropout)
@@ -23,7 +23,7 @@ class ImageRNNClassifier(nn.Module):
 class ImageLSTMClassifier(nn.Module):
     """Read each grayscale image row with an LSTM."""
 
-    def __init__(self, image_size: int = 64, n_classes: int = 2, hidden_size: int = 96, dropout: float = 0.1) -> None:
+    def __init__(self, image_size: int = 224, n_classes: int = 2, hidden_size: int = 96, dropout: float = 0.1) -> None:
         super().__init__()
         self.lstm = nn.LSTM(input_size=image_size, hidden_size=hidden_size, batch_first=True)
         self.head = _Head(hidden_size, n_classes, dropout)
@@ -39,8 +39,8 @@ class PatchTransformerClassifier(nn.Module):
 
     def __init__(
         self,
-        image_size: int = 64,
-        patch_size: int = 8,
+        image_size: int = 224,
+        patch_size: int = 16,
         n_classes: int = 2,
         d_model: int = 128,
         nhead: int = 4,
@@ -75,8 +75,8 @@ class TinyViTClassifier(nn.Module):
 
     def __init__(
         self,
-        image_size: int = 64,
-        patch_size: int = 8,
+        image_size: int = 224,
+        patch_size: int = 16,
         n_classes: int = 2,
         d_model: int = 128,
         nhead: int = 4,

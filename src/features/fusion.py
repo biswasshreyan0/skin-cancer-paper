@@ -8,14 +8,13 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from PIL import Image
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from src.features.abcde import ABCDE_FEATURE_COLUMNS
+from src.features.abcde import ABCD_FEATURE_COLUMNS
 
 
 @dataclass
@@ -36,6 +35,7 @@ def build_feature_sets(
     embedding_cache: dict[str, np.ndarray],
     out_dir: str | Path,
     pca_dim: int = 64,
+    save_artifacts: bool = True,
 ) -> dict[str, FeatureSet]:
     """Create all requested feature sets, fitting transforms on train only."""
     abcde_by_id = abcde_df.copy()
@@ -49,21 +49,11 @@ def build_feature_sets(
     train_emb = _embedding_matrix(train_df, emb_by_id)
     val_emb = _embedding_matrix(val_df, emb_by_id)
     test_emb = _embedding_matrix(test_df, emb_by_id)
-    train_raw25 = _raw_pixel_matrix(train_df)
-    val_raw25 = _raw_pixel_matrix(val_df)
-    test_raw25 = _raw_pixel_matrix(test_df)
-
     feature_sets: dict[str, FeatureSet] = {}
 
-    raw25_pipeline = Pipeline([("imputer", SimpleImputer()), ("scaler", StandardScaler())])
-    raw25_names = [f"raw25_px_{i:03d}" for i in range(train_raw25.shape[1])]
-    feature_sets["raw25_pixels"] = _fit_tabular_set(
-        "raw25_pixels", raw25_pipeline, train_raw25, val_raw25, test_raw25, raw25_names
-    )
-
     abcde_pipeline = Pipeline([("imputer", SimpleImputer()), ("scaler", StandardScaler())])
-    feature_sets["abcde"] = _fit_tabular_set(
-        "abcde", abcde_pipeline, train_abcde, val_abcde, test_abcde, ABCDE_FEATURE_COLUMNS
+    feature_sets["abcd"] = _fit_tabular_set(
+        "abcd", abcde_pipeline, train_abcde, val_abcde, test_abcde, ABCD_FEATURE_COLUMNS
     )
 
     emb_pipeline = Pipeline([("imputer", SimpleImputer()), ("scaler", StandardScaler())])
@@ -75,10 +65,10 @@ def build_feature_sets(
     combined_train = np.hstack([train_abcde, train_emb])
     combined_val = np.hstack([val_abcde, val_emb])
     combined_test = np.hstack([test_abcde, test_emb])
-    combined_names = ABCDE_FEATURE_COLUMNS + embedding_names
+    combined_names = ABCD_FEATURE_COLUMNS + embedding_names
     combined_pipeline = Pipeline([("imputer", SimpleImputer()), ("scaler", StandardScaler())])
-    feature_sets["abcde_embeddings"] = _fit_tabular_set(
-        "abcde_embeddings", combined_pipeline, combined_train, combined_val, combined_test, combined_names
+    feature_sets["abcd_embeddings"] = _fit_tabular_set(
+        "abcd_embeddings", combined_pipeline, combined_train, combined_val, combined_test, combined_names
     )
 
     pca_dim = max(1, min(pca_dim, train_emb.shape[0], train_emb.shape[1]))
@@ -95,17 +85,17 @@ def build_feature_sets(
     test_pca = pca_pipeline.transform(test_emb)
     pca_names = [f"emb_pca_{i:03d}" for i in range(train_pca.shape[1])]
     abcde_pca_pipeline = Pipeline([("imputer", SimpleImputer()), ("scaler", StandardScaler())])
-    feature_sets["abcde_pca_embeddings"] = _fit_tabular_set(
-        "abcde_pca_embeddings",
+    feature_sets["abcd_pca_embeddings"] = _fit_tabular_set(
+        "abcd_pca_embeddings",
         abcde_pca_pipeline,
         np.hstack([train_abcde, train_pca]),
         np.hstack([val_abcde, val_pca]),
         np.hstack([test_abcde, test_pca]),
-        ABCDE_FEATURE_COLUMNS + pca_names,
+        ABCD_FEATURE_COLUMNS + pca_names,
     )
-    feature_sets["abcde_pca_embeddings"].transformer = {
+    feature_sets["abcd_pca_embeddings"].transformer = {
         "embedding_pca": pca_pipeline,
-        "final_preprocessor": feature_sets["abcde_pca_embeddings"].transformer,
+        "final_preprocessor": feature_sets["abcd_pca_embeddings"].transformer,
     }
 
     meta_processor = ColumnTransformer(
@@ -135,28 +125,49 @@ def build_feature_sets(
         "metadata", metadata_only_pipeline, train_meta, val_meta, test_meta, meta_names
     )
 
+    abcd_metadata_pipeline = Pipeline([("imputer", SimpleImputer()), ("scaler", StandardScaler())])
+    feature_sets["abcd_metadata"] = _fit_tabular_set(
+        "abcd_metadata",
+        abcd_metadata_pipeline,
+        np.hstack([train_abcde, train_meta]),
+        np.hstack([val_abcde, val_meta]),
+        np.hstack([test_abcde, test_meta]),
+        ABCD_FEATURE_COLUMNS + meta_names,
+    )
+
+    embeddings_metadata_pipeline = Pipeline([("imputer", SimpleImputer()), ("scaler", StandardScaler())])
+    feature_sets["embeddings_metadata"] = _fit_tabular_set(
+        "embeddings_metadata",
+        embeddings_metadata_pipeline,
+        np.hstack([train_emb, train_meta]),
+        np.hstack([val_emb, val_meta]),
+        np.hstack([test_emb, test_meta]),
+        embedding_names + meta_names,
+    )
+
     metadata_train = np.hstack([combined_train, train_meta])
     metadata_val = np.hstack([combined_val, val_meta])
     metadata_test = np.hstack([combined_test, test_meta])
     metadata_pipeline = Pipeline([("imputer", SimpleImputer()), ("scaler", StandardScaler())])
-    feature_sets["abcde_embeddings_metadata"] = _fit_tabular_set(
-        "abcde_embeddings_metadata",
+    feature_sets["abcd_embeddings_metadata"] = _fit_tabular_set(
+        "abcd_embeddings_metadata",
         metadata_pipeline,
         metadata_train,
         metadata_val,
         metadata_test,
         combined_names + meta_names,
     )
-    feature_sets["abcde_embeddings_metadata"].transformer = {
+    feature_sets["abcd_embeddings_metadata"].transformer = {
         "metadata_processor": meta_processor,
-        "final_preprocessor": feature_sets["abcde_embeddings_metadata"].transformer,
+        "final_preprocessor": feature_sets["abcd_embeddings_metadata"].transformer,
     }
 
-    artifacts_dir = Path(out_dir) / "models" / "feature_transforms"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    for name, fs in feature_sets.items():
-        if fs.transformer is not None:
-            joblib.dump(fs.transformer, artifacts_dir / f"{name}_transformer.joblib")
+    if save_artifacts:
+        artifacts_dir = Path(out_dir) / "models" / "feature_transforms"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        for name, fs in feature_sets.items():
+            if fs.transformer is not None:
+                joblib.dump(fs.transformer, artifacts_dir / f"{name}_transformer.joblib")
     return feature_sets
 
 
@@ -197,12 +208,4 @@ def _embedding_matrix(df: pd.DataFrame, emb_by_id: dict[str, np.ndarray]) -> np.
 
 
 def _abcde_matrix(df: pd.DataFrame, abcde_by_id: pd.DataFrame) -> np.ndarray:
-    return abcde_by_id.loc[df["image_id"].astype(str), ABCDE_FEATURE_COLUMNS].to_numpy(dtype=float)
-
-
-def _raw_pixel_matrix(df: pd.DataFrame, size: int = 25) -> np.ndarray:
-    rows = []
-    for path in df["image_path"]:
-        image = Image.open(path).convert("L").resize((size, size), Image.BILINEAR)
-        rows.append(np.asarray(image, dtype=np.float32).reshape(-1) / 255.0)
-    return np.vstack(rows)
+    return abcde_by_id.loc[df["image_id"].astype(str), ABCD_FEATURE_COLUMNS].to_numpy(dtype=float)

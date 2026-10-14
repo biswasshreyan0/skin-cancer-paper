@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data.ham10000 import load_ham10000
 from src.data.splits import make_lesion_splits
+from src.data.targets import get_target_spec, prepare_task_dataframe
 from src.features.abcde import extract_abcde_dataframe
 from src.features.cache import (
     abcde_cache_path,
@@ -57,9 +58,12 @@ def main() -> None:
     for subdir in ["embeddings", "features", "models", "reports", "splits", "predictions", "figures"]:
         ensure_dir(out_dir / subdir)
 
-    df = load_ham10000(args.data_root)
+    target = get_target_spec("cancer")
+    df = prepare_task_dataframe(load_ham10000(args.data_root), "cancer")
     df["image_id"] = df["image_id"].astype(str)
-    train_df, val_df, test_df = make_lesion_splits(df, out_dir, seed=args.seed)
+    train_df, val_df, test_df = make_lesion_splits(
+        df, out_dir, label_col=target.label_column, seed=args.seed
+    )
     abcde_df = _get_abcde_features(df, out_dir, args.force_recompute_abcde)
     embedding_cache = _get_embeddings(
         df,
@@ -79,9 +83,9 @@ def main() -> None:
         pca_dim=args.pca_dim,
     )
 
-    y_train = train_df["binary_label"].to_numpy()
-    y_val = val_df["binary_label"].to_numpy()
-    y_test = test_df["binary_label"].to_numpy()
+    y_train = train_df[target.label_column].to_numpy()
+    y_val = val_df[target.label_column].to_numpy()
+    y_test = test_df[target.label_column].to_numpy()
     grid = {
         "max_depth": args.max_depths,
         "min_samples_leaf": args.min_samples_leaf,
@@ -91,7 +95,7 @@ def main() -> None:
     for feature_name, fs in feature_sets.items():
         print(f"[trees] training {feature_name} decision tree on {fs.X_train.shape}", flush=True)
         model, params, val_score = _select_tree(fs.X_train, y_train, fs.X_val, y_val, grid, args.seed)
-        test_metrics, y_pred, y_prob = evaluate_model(model, fs.X_test, y_test, task="binary")
+        test_metrics, y_pred, y_prob = evaluate_model(model, fs.X_test, y_test, task="cancer")
         metrics[feature_name] = {
             "best_params": params,
             "validation_selection_score": val_score,
@@ -110,7 +114,7 @@ def main() -> None:
             rules, encoding="utf-8"
         )
         save_tree_plot(model, fs.feature_names, out_dir / "figures" / f"{feature_name}_decision_tree_depth_search.png")
-        if feature_name == "abcde_embeddings":
+        if feature_name == "abcd_embeddings":
             (out_dir / "reports" / "tree_rules.txt").write_text(rules, encoding="utf-8")
             save_tree_plot(model, fs.feature_names, out_dir / "figures" / "decision_tree.png")
         row = {
@@ -152,7 +156,7 @@ def _select_tree(X_train, y_train, X_val, y_val, grid, seed: int):
         print(f"[trees]   params {idx}/{len(params_list)}: {params}", flush=True)
         model = DecisionTreeClassifier(class_weight="balanced", random_state=seed, **params)
         model.fit(X_train, y_train)
-        val_metrics, _, _ = evaluate_model(model, X_val, y_val, task="binary")
+        val_metrics, _, _ = evaluate_model(model, X_val, y_val, task="cancer")
         score = val_metrics.get("ROC-AUC", np.nan)
         if not np.isfinite(score):
             score = val_metrics.get("balanced_accuracy", -np.inf)

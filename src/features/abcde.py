@@ -1,4 +1,9 @@
-"""Approximate ABCDE-style feature extraction from lesion images."""
+"""Approximate ABCD-style feature extraction from single lesion images.
+
+Evolution (E) is intentionally absent because HAM10000 has no longitudinal
+observations.  Diameter is a normalized image fraction, not millimeters,
+because the dataset provides no physical scale metadata.
+"""
 
 from __future__ import annotations
 
@@ -16,14 +21,14 @@ try:
 except Exception:
     cv2 = None
 
-ABCDE_FEATURE_COLUMNS = [
+ABCD_FEATURE_COLUMNS = [
     "asymmetry_score",
     "border_irregularity",
     "compactness",
     "area_ratio",
     "color_variance",
     "color_entropy",
-    "diameter_proxy",
+    "diameter_fraction",
     "mean_r",
     "mean_g",
     "mean_b",
@@ -33,28 +38,28 @@ ABCDE_FEATURE_COLUMNS = [
 ]
 
 
-def extract_abcde_dataframe(
+def extract_abcd_dataframe(
     image_paths: Iterable[str | Path],
     image_ids: Iterable[str] | None = None,
     show_progress: bool = True,
 ) -> pd.DataFrame:
-    """Extract one ABCDE feature row per image path."""
+    """Extract one single-image ABCD feature row per image path."""
     _require_cv2()
     image_paths = list(image_paths)
     image_ids = list(image_ids) if image_ids is not None else [Path(p).stem for p in image_paths]
     rows = []
     iterator = zip(image_ids, image_paths)
     if show_progress:
-        iterator = tqdm(list(iterator), desc="Extracting ABCDE features")
+        iterator = tqdm(list(iterator), desc="Extracting ABCD features")
     for image_id, image_path in iterator:
-        row = extract_abcde_features(image_path)
+        row = extract_abcd_features(image_path)
         row["image_id"] = image_id
         row["image_path"] = str(image_path)
         rows.append(row)
     return pd.DataFrame(rows)
 
 
-def extract_abcde_features(image: str | Path | Image.Image) -> dict[str, float | bool]:
+def extract_abcd_features(image: str | Path | Image.Image) -> dict[str, float | bool]:
     """Extract approximate asymmetry, border, color, and diameter features."""
     _require_cv2()
     try:
@@ -85,7 +90,7 @@ def extract_abcde_features(image: str | Path | Image.Image) -> dict[str, float |
             "area_ratio": float(mask_bool.mean()),
             "color_variance": float(np.var(lesion_pixels.astype(np.float32))),
             "color_entropy": _color_entropy(lesion_pixels),
-            "diameter_proxy": float(max(w, h) / 224.0),
+            "diameter_fraction": float(max(w, h) / 224.0),
             "mean_r": float(np.mean(lesion_pixels[:, 0])),
             "mean_g": float(np.mean(lesion_pixels[:, 1])),
             "mean_b": float(np.mean(lesion_pixels[:, 2])),
@@ -110,7 +115,7 @@ def _load_rgb(image: str | Path | Image.Image) -> np.ndarray:
 def _require_cv2() -> None:
     if cv2 is None:
         raise RuntimeError(
-            "ABCDE feature extraction requires opencv-python. "
+            "ABCD feature extraction requires opencv-python. "
             "Install project dependencies with `pip install -r requirements.txt`."
         )
 
@@ -176,6 +181,12 @@ def _color_entropy(lesion_pixels: np.ndarray) -> float:
 
 
 def _failed_features() -> dict[str, float | bool]:
-    values: dict[str, float | bool] = {name: 0.0 for name in ABCDE_FEATURE_COLUMNS}
+    values: dict[str, float | bool] = {name: 0.0 for name in ABCD_FEATURE_COLUMNS}
     values["segmentation_failed"] = True
     return values
+
+
+# Backward-compatible import aliases; new results and report names use ABCD.
+ABCDE_FEATURE_COLUMNS = ABCD_FEATURE_COLUMNS
+extract_abcde_dataframe = extract_abcd_dataframe
+extract_abcde_features = extract_abcd_features
